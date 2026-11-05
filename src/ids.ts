@@ -57,6 +57,18 @@ export function newSiteId(now: number): string {
   return `site_${newUlid(now)}`;
 }
 
+export const ARTICLE_ID_PATTERN = new RegExp(`^art_${ULID_PATTERN}$`);
+
+export function newArticleId(now: number): string {
+  return `art_${newUlid(now)}`;
+}
+
+export const RECORD_ID_PATTERN = new RegExp(`^rec_${ULID_PATTERN}$`);
+
+export function newRecordId(now: number): string {
+  return `rec_${newUlid(now)}`;
+}
+
 export function base64Url(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);

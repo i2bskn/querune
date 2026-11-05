@@ -5,6 +5,10 @@ export type Route =
   | { name: "users" }
   | { name: "sites" }
   | { name: "siteDetail"; id: string }
+  | { name: "siteArticles"; id: string }
+  | { name: "siteRecords"; id: string }
+  | { name: "articleDetail"; id: string }
+  | { name: "recordDetail"; id: string }
   | { name: "notFound" };
 
 // hc() puts params into the URL without encoding them, so IDs are limited to characters that cannot
@@ -25,6 +29,14 @@ export function matchRoute(path: string): Route {
   if (pathname === "/sites") return { name: "sites" };
   const site = /^\/sites\/([^/]+)$/.exec(pathname);
   if (site?.[1] !== undefined && isValidId(site[1])) return { name: "siteDetail", id: site[1] };
+  const siteContent = /^\/sites\/([^/]+)\/(articles|records)$/.exec(pathname);
+  if (siteContent?.[1] !== undefined && isValidId(siteContent[1])) {
+    return { name: siteContent[2] === "articles" ? "siteArticles" : "siteRecords", id: siteContent[1] };
+  }
+  const item = /^\/(articles|records)\/([^/]+)$/.exec(pathname);
+  if (item?.[2] !== undefined && isValidId(item[2])) {
+    return { name: item[1] === "articles" ? "articleDetail" : "recordDetail", id: item[2] };
+  }
   return { name: "notFound" };
 }
 

@@ -52,6 +52,10 @@ export function currentNavItem(route: Route): NavItemId | null {
       return "overview";
     case "sites":
     case "siteDetail":
+    case "siteArticles":
+    case "siteRecords":
+    case "articleDetail":
+    case "recordDetail":
       return "sites";
     case "users":
       return "users";

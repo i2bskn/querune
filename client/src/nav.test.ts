@@ -25,6 +25,10 @@ describe("currentNavItem", () => {
     [{ name: "home" }, "overview"],
     [{ name: "sites" }, "sites"],
     [{ name: "siteDetail", id: "site_1" }, "sites"],
+    [{ name: "siteArticles", id: "site_1" }, "sites"],
+    [{ name: "siteRecords", id: "site_1" }, "sites"],
+    [{ name: "articleDetail", id: "art_1" }, "sites"],
+    [{ name: "recordDetail", id: "rec_1" }, "sites"],
     [{ name: "users" }, "users"],
     [{ name: "notFound" }, null],
   ])("maps %o", (route, expected) => {
@@ -41,6 +45,7 @@ describe("ariaCurrentFor", () => {
 
   it("is location on a screen inside the item", () => {
     expect(ariaCurrentFor({ name: "siteDetail", id: "site_1" }, "sites")).toBe("location");
+    expect(ariaCurrentFor({ name: "articleDetail", id: "art_1" }, "sites")).toBe("location");
   });
 
   it("is undefined for other items and on the not found screen", () => {

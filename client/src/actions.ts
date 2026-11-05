@@ -1,9 +1,15 @@
 import type {
+  Article,
+  CreateArticleRequest,
+  CreateRecordRequest,
   CreateSiteRequest,
   CreateUserRequest,
   Site,
   SyncRequest,
   SyncResponse,
+  SiteRecord,
+  UpdateArticleRequest,
+  UpdateRecordRequest,
   UpdateSiteRequest,
   User,
 } from "../../src/api/types";
@@ -167,4 +173,76 @@ export async function requestSync(client: ApiClient, siteId: string, input: Sync
   }
   if (res.status === 404) return { kind: "notFound" };
   return { kind: "error", message: await responseErrorMessage(res) };
+}
+
+// The outcome of creating or changing an article or a record.
+export type ItemResult<T> = { kind: "ok"; item: T } | { kind: "notFound" } | SendFailure;
+
+async function itemResult<T, R extends { ok: boolean; status: number; json(): Promise<unknown> }>(
+  sent: { kind: "response"; res: R } | SendFailure,
+): Promise<ItemResult<T>> {
+  if (sent.kind !== "response") return sent;
+  const { res } = sent;
+  if (res.ok) {
+    const body = await okJson(res as { status: number; json(): Promise<T> });
+    return body.kind === "ok" ? { kind: "ok", item: body.value } : body;
+  }
+  if (res.status === 404) return { kind: "notFound" };
+  return { kind: "error", message: await responseErrorMessage(res) };
+}
+
+const INVALID_ARTICLE_ID = { kind: "error", message: "記事が見つかりません" } as const;
+const INVALID_RECORD_ID = { kind: "error", message: "記録が見つかりません" } as const;
+
+// Registers an article in a site. notFound means the site is gone; errors, including url_conflict and
+// limit_exceeded (409), are shown with the server's message. Never rejects.
+export async function createArticle(
+  client: ApiClient,
+  siteId: string,
+  input: CreateArticleRequest,
+): Promise<ItemResult<Article>> {
+  if (!isValidId(siteId)) return INVALID_SITE_ID;
+  return itemResult(await send(() => client.api.v1.sites[":id"].articles.$post({ param: { id: siteId }, json: input })));
+}
+
+// Changes the given items of an article. Never rejects.
+export async function updateArticle(
+  client: ApiClient,
+  articleId: string,
+  input: UpdateArticleRequest,
+): Promise<ItemResult<Article>> {
+  if (!isValidId(articleId)) return INVALID_ARTICLE_ID;
+  return itemResult(await send(() => client.api.v1.articles[":id"].$patch({ param: { id: articleId }, json: input })));
+}
+
+// Deletes an article. Its records stay. Never rejects.
+export async function deleteArticle(client: ApiClient, articleId: string): Promise<ResourceActionResult> {
+  if (!isValidId(articleId)) return INVALID_ARTICLE_ID;
+  return resourceActionResult(await send(() => client.api.v1.articles[":id"].$delete({ param: { id: articleId } })));
+}
+
+// Registers a record in a site. notFound means the site is gone. Never rejects.
+export async function createRecord(
+  client: ApiClient,
+  siteId: string,
+  input: CreateRecordRequest,
+): Promise<ItemResult<SiteRecord>> {
+  if (!isValidId(siteId)) return INVALID_SITE_ID;
+  return itemResult(await send(() => client.api.v1.sites[":id"].records.$post({ param: { id: siteId }, json: input })));
+}
+
+// Changes the given items of a record. Never rejects.
+export async function updateRecord(
+  client: ApiClient,
+  recordId: string,
+  input: UpdateRecordRequest,
+): Promise<ItemResult<SiteRecord>> {
+  if (!isValidId(recordId)) return INVALID_RECORD_ID;
+  return itemResult(await send(() => client.api.v1.records[":id"].$patch({ param: { id: recordId }, json: input })));
+}
+
+// Deletes a record. Never rejects.
+export async function deleteRecord(client: ApiClient, recordId: string): Promise<ResourceActionResult> {
+  if (!isValidId(recordId)) return INVALID_RECORD_ID;
+  return resourceActionResult(await send(() => client.api.v1.records[":id"].$delete({ param: { id: recordId } })));
 }

@@ -251,6 +251,8 @@ input[type="text"],
 input[type="email"],
 input[type="password"],
 input[type="number"],
+input[type="url"],
+input[type="date"],
 select,
 textarea {
   max-width: 100%;
@@ -1018,6 +1020,120 @@ code {
   font-family: var(--font-mono);
   font-size: 0.875em;
   overflow-wrap: anywhere;
+}
+
+/* ---------- Articles and records ---------- */
+
+/* Text typed by users, shown as it is with its line breaks. */
+.text-body {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.tag {
+  padding: 0 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+  background: var(--accent-soft);
+  border-radius: var(--radius);
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 0 0 1.25rem;
+}
+
+.filter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+  margin: 0 0 1.25rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.filters .filter {
+  margin: 0;
+}
+
+.filter select {
+  min-width: 10rem;
+}
+
+.plain-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.picker {
+  min-width: 0;
+  margin: 0 0 1rem;
+  padding: 0;
+  border: 0;
+}
+
+.picker legend {
+  margin: 0 0 0.35rem;
+  padding: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.picker-list {
+  margin: 0 0 0.5rem;
+  padding: 0;
+  list-style: none;
+}
+
+.picker-list > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.picker-list > li > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.picker-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.picker-add select {
+  flex: 1 1 12rem;
+}
+
+@media (max-width: 479px) {
+  .filters {
+    flex-direction: column;
+  }
+
+  .filter select {
+    width: 100%;
+    min-width: 0;
+  }
 }
 
 /* ---------- Overview ---------- */

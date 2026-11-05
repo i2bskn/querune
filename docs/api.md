@@ -1,6 +1,6 @@
 # APIリファレンス
 
-ログイン、ユーザー管理、サイト、データの取り込み、MCP（OAuth、ツール）、データの扱いの仕様をまとめます。導入と設定の手順は[README](../README.md)と[設定](settings.md)を参照してください。
+ログイン、ユーザー管理、サイト、データの取り込み、記事と記録、MCP（OAuth、ツール）、データの扱いの仕様をまとめます。導入と設定の手順は[README](../README.md)と[設定](settings.md)を参照してください。
 
 ## ログイン
 
@@ -40,7 +40,7 @@
 | `POST /api/v1/sites` | サイトの登録。本文は`{ "name", "url", "gsc_property"?, "ga4_property_id"? }` | 201 `Site` |
 | `GET /api/v1/sites/:id` | サイト1件 | 200 `Site` |
 | `PATCH /api/v1/sites/:id` | サイトの変更。本文は`name`、`url`、`gsc_property`、`ga4_property_id`のうち変える項目だけ | 200 `Site` |
-| `DELETE /api/v1/sites/:id` | サイトの削除。取り込み済みのデータも削除する | 204 |
+| `DELETE /api/v1/sites/:id` | サイトの削除。取り込み済みのデータと、記事・記録も削除する | 204 |
 
 - ログインしたユーザーなら、ロールに関係なくすべて使えます。全ユーザーが同じサイトを見ます。
 - サイトは100件まで登録できます。
@@ -180,6 +180,108 @@
 - 取り直し中や取り直しに失敗した日も、前回成功した時点のデータは残り、集計に使われます。
 - プロパティを変更すると、そのデータソースの取り込みの状況を消し、古いプロパティの行は集計に使われなくなります。行は削除の予約として、キューで5,000行ずつ削除します。サイトを削除した場合も同じです。削除のメッセージが届かなかった場合は、毎日の処理が送り直します。元のプロパティに戻して取り込み直した日の行は削除しません。
 
+## 記事と記録
+
+サイトごとに、記事の台帳と記録（施策・レビュー・メモ）を持ちます。どちらも利用者が決める自由なタグで分類できます。分類の軸、振り返りの周期や期間は決めていません。
+
+| エンドポイント | 内容 | 成功 |
+| --- | --- | --- |
+| `GET /api/v1/sites/:id/articles` | サイトの記事の一覧（`note`を含まない）。クエリ`tag`で1つのタグに完全一致する記事だけにできる | 200 `{ "articles": ArticleSummary[] }` |
+| `POST /api/v1/sites/:id/articles` | 記事の登録。本文は`{ "title", "url"?, "published_on"?, "tags"?, "note"? }` | 201 `Article` |
+| `GET /api/v1/articles/:id` | 記事1件 | 200 `Article` |
+| `PATCH /api/v1/articles/:id` | 記事の変更。本文は`title`、`url`、`published_on`、`tags`、`note`のうち変える項目だけ | 200 `Article` |
+| `DELETE /api/v1/articles/:id` | 記事の削除。記録は残り、その記事との関連付けだけを外す | 204 |
+| `GET /api/v1/sites/:id/records` | サイトの記録の一覧（`content`を含まない） | 200 `{ "records": RecordSummary[], "next_offset" }` |
+| `POST /api/v1/sites/:id/records` | 記録の登録。本文は`{ "kind", "title", "status"?, "date"?, "period_start"?, "period_end"?, "tags"?, "content"?, "article_ids"? }` | 201 `SiteRecord` |
+| `GET /api/v1/records/:id` | 記録1件 | 200 `SiteRecord` |
+| `PATCH /api/v1/records/:id` | 記録の変更。本文は登録と同じ項目のうち変える項目だけ | 200 `SiteRecord` |
+| `DELETE /api/v1/records/:id` | 記録の削除 | 204 |
+| `GET /api/v1/sites/:id/tags` | サイトの記事と記録で使われているタグ | 200 `{ "tags": [{ "tag", "articles", "records" }], "truncated" }` |
+
+- ログインしたユーザーなら、ロールに関係なくすべて使えます。
+- 削除は管理画面（このREST API）からだけ行えます。MCPには削除のツールがありません。
+- 変更の履歴は残しません。`PATCH`は、値が保存済みのものと同じでも成功し、`updated_at`を更新します（`article_ids`だけの変更でも更新します）。`id`、`site_id`、`created_at`は変えられません（`unknown_field`）。
+- サイトを削除すると、そのサイトの記事・記録・関連付けも削除されます。
+- 1サイトあたり記事は1,000件、記録は2,000件まで登録できます。
+
+`Article`と`SiteRecord`の形は次のとおりです。日付は`YYYY-MM-DD`、時刻はUNIX時間のミリ秒です。
+
+```json
+{
+  "id": "art_01JC9Z8Q4R6T2V7W3X5Y1A0B2C",
+  "site_id": "site_01JC9Z8Q4R6T2V7W3X5Y1A0B2C",
+  "title": "記事のタイトル",
+  "url": "https://example.com/articles/1",
+  "published_on": "2026-01-15",
+  "tags": ["topic:example"],
+  "note": "メモ",
+  "created_at": 1767225600000,
+  "updated_at": 1767225600000
+}
+```
+
+```json
+{
+  "id": "rec_01JC9Z8Q4R6T2V7W3X5Y1A0B2C",
+  "site_id": "site_01JC9Z8Q4R6T2V7W3X5Y1A0B2C",
+  "kind": "review",
+  "status": "done",
+  "title": "1月の振り返り",
+  "date": "2026-02-01",
+  "period_start": "2026-01-01",
+  "period_end": "2026-01-31",
+  "tags": [],
+  "content": "内容",
+  "articles": [{ "id": "art_01JC9Z8Q4R6T2V7W3X5Y1A0B2C", "title": "記事のタイトル", "url": "https://example.com/articles/1" }],
+  "created_at": 1767225600000,
+  "updated_at": 1767225600000
+}
+```
+
+- `kind`は`action`（施策）・`review`（レビュー）・`note`（メモ）、`status`は`planned`（予定）・`done`（実施済み）・`canceled`（中止）です。`status`は種類によらず同じで、登録で省略すると`done`です。使い分けは利用者が決めます。
+- `date`は実施した日か予定の日、`period_start`・`period_end`は記録が対象とする期間（例えばレビューで見た期間）です。
+- `ArticleSummary`は`Article`から`note`を除いたもの、`RecordSummary`は`SiteRecord`から`content`を除き、`articles`を`{ "id", "title" }`にしたものです。
+- 記録の`articles`はタイトルの昇順、同じタイトルは`id`の昇順です。
+
+### 一覧の並びと絞り込み
+
+- 記事の一覧は、公開日のない記事が先、続いて`published_on`の降順、同じ日は`id`の降順です。
+- 記録の一覧は、日付のない記録が先、続いて`date`の降順、同じ日は`id`の降順です。MCPの一覧と記事にひも付く記録も同じ並びです。
+- 記録の一覧のクエリは`kind`、`status`、`tag`、`article_id`、`date_from`、`date_to`（`date`の範囲。両端を含み、どちらかを指定すると日付のない記録は含まない）、`limit`（1〜100、既定50）、`offset`（0〜2000、既定0）です。続きがあれば`next_offset`に次の`offset`を返し、なければ`null`です。
+- `tag`はタグの規則で正規化してから完全一致で比べます。`article_id`は形式が正しければ、存在しない記事や別のサイトの記事でも空の一覧を返します。
+- 未知のクエリは無視します。値が正しくなければ`invalid_query`です。
+- タグの一覧は、使われている件数（記事と記録の合計）の多い順、同じ件数はタグの昇順で、200個までです。それより多ければ`truncated`が`true`です。
+
+### 入力の検証
+
+| 項目 | 規則 | 保存する値 |
+| --- | --- | --- |
+| `title` | 文字列。前後の空白を除いて1〜200文字（コードポイント数）、制御文字を含まない | 前後の空白を除いた値 |
+| `url` | `null`、空文字、または文字列。前後の空白を除いて2048文字以下。スキームが`https`か`http`で、ユーザー名・パスワードを含まない。ホストはサイトのURLと同じでなくてよい | `null`と空文字は`null`。フラグメントを除いた正規化したURL（2048文字以下）。クエリは残す |
+| `published_on`、`date`、`period_start`、`period_end` | `null`、空文字、または存在する日付の`YYYY-MM-DD` | `null`と空文字は`null` |
+| `period_start`・`period_end` | 両方とも指定するか両方とも`null`で、開始日は終了日以前。`PATCH`で片方だけを指定すると、保存済みのもう片方と合わせて確かめる | |
+| `tags` | 文字列の配列。各タグは前後の空白を除きNFCで正規化して1〜50文字、制御文字と`,`・`、`・`，`を含まない。重複を除いて20個まで | 重複（大文字小文字を区別）を除き、最初の順に並べた配列 |
+| `note`、`content` | 文字列。改行とタブ以外の制御文字を含まない。改行を`\n`にそろえて10,000文字以下 | 改行を`\n`にそろえた値。前後の空白は除かない |
+| `kind`、`status` | 上記の値のいずれか | |
+| `article_ids` | 記事のIDの配列。同じサイトの登録済みの記事で、重複を除いて5件まで。`PATCH`では関連付けの全体を置き換える | |
+
+記録の登録と同時に別の要求が記事を削除した場合、その記事は関連付けずに登録します。このため、保存した関連付けが`article_ids`より少ないことがあります。応答の`articles`が保存した関連付けです。
+
+### エラー
+
+| ステータス | コード | 条件 |
+| --- | --- | --- |
+| 400 | `invalid_body` | 本文がJSONのオブジェクトでない |
+| 400 | `unknown_field` | 未知の項目がある |
+| 400 | `invalid_request` | `PATCH`の本文が空のオブジェクト |
+| 400 | `invalid_title`・`invalid_url`・`invalid_date`・`invalid_period`・`invalid_tags`・`invalid_note`・`invalid_content`・`invalid_kind`・`invalid_status` | その項目が規則に合わない |
+| 400 | `invalid_articles` | `article_ids`に形式の正しくないID、存在しない記事、別のサイトの記事がある、または6件以上ある |
+| 400 | `invalid_query` | 一覧のクエリが正しくない |
+| 401 | `unauthorized` | ログインしていない |
+| 404 | `not_found` | サイト・記事・記録が見つからない、またはIDの形式が正しくない |
+| 409 | `url_conflict` | 同じサイトに同じ`url`の記事がある（登録・変更とも） |
+| 409 | `limit_exceeded` | 記事か記録が上限の件数ある状態での登録 |
+
 ## MCP
 
 ### 認証
@@ -199,7 +301,7 @@
 - ユーザーの削除、パスワード変更、セッションの失効では、そのユーザーのgrantをすべて取り消します。
 - パスワード変更とセッションの失効では、その時刻までに許可したトークンを`/mcp`で拒否します。grantの一覧の反映が遅れて取り消しから漏れたgrantにも効きます。
 - 同じクライアント・同じリダイレクトURIで許可し直すと、そのクライアントの以前のgrantは取り消されます。
-- 接続したユーザーは、全サイトのデータと記録を読めます。サイトごとに読める範囲を絞る機能はありません。
+- 接続したユーザーは、全サイトのデータと記録を読め、記事と記録を登録・編集できます。サイトごとに読める範囲を絞る機能はありません。
 
 ### ツール
 
@@ -209,8 +311,20 @@
 | `get_sync_status` | `site_id` | `GET /api/v1/sites/:id/sync`と同じ`SyncStatus` |
 | `query_search_performance` | `site_id`、`start_date`、`end_date`（必須）、`group_by`（`page`・`query`・`page_query`・`date`、既定`page`）、`page`（完全一致）、`query_contains`（部分一致。`group_by`が`query`・`page_query`のときだけ）、`compare_start_date`・`compare_end_date`、`order_by`（`clicks`・`impressions`、既定`clicks`）、`limit`（1〜100、既定20） | Search Consoleの集計。`rows`、`totals`、`coverage`、`notes` |
 | `query_landing_sessions` | `site_id`、`start_date`、`end_date`（必須）、`group_by`（`landing_page`・`channel_group`・`landing_page_channel_group`・`date`、既定`landing_page`）、`channel_group`（完全一致。例 `Organic Search`）、`landing_page`（完全一致）、`compare_start_date`・`compare_end_date`、`order_by`（`sessions`・`engaged_sessions`・`key_events`、既定`sessions`）、`limit`（1〜100、既定20） | GA4の集計。`rows`、`totals`、`coverage`、`notes` |
+| `list_articles` | `site_id`、`tag`（完全一致）、`published`（`true`は公開日のある記事、`false`はない記事）、`title_contains`（タイトルの部分一致。1〜100文字。ASCIIの大文字小文字を区別しない）、`limit`（1〜200、既定50）、`offset`（既定0） | `{ "site_id", "articles", "next_offset" }`。各記事は`ArticleSummary`にメモの先頭200文字`note_preview`を付けたもの |
+| `get_article` | `article_id` | `Article`に、ひも付く記録`records`（`RecordSummary`、新しい順に50件まで）、その件数`records_total`、`search_console_page`（記事のURL）、`ga4_landing_page`（URLのパス）を付けたもの。URLがなければ後の2つは`null` |
+| `list_records` | `site_id`、`kind`、`status`、`tag`、`article_id`、`date_from`、`date_to`、`limit`（1〜100、既定20）、`offset`（既定0） | `{ "site_id", "records", "next_offset" }`。各記録は`RecordSummary`に内容の先頭300文字`content_preview`を付けたもの |
+| `get_record` | `record_id` | `SiteRecord` |
+| `list_tags` | `site_id` | `GET /api/v1/sites/:id/tags`と同じ |
+| `create_article` | `site_id`、`title`（必須）、`url`、`published_on`、`tags`、`note` | 登録した`Article` |
+| `update_article` | `article_id`（必須）と、変える項目（`title`、`url`、`published_on`、`tags`、`note`のうち1つ以上） | 変更後の`Article`に、変更前の記事`previous`を付けたもの |
+| `create_record` | `site_id`、`kind`、`title`（必須）、`status`、`date`、`period_start`、`period_end`、`tags`、`content`、`article_ids` | 登録した`SiteRecord` |
+| `update_record` | `record_id`（必須）と、変える項目（登録と同じ項目のうち1つ以上） | 変更後の`SiteRecord`に、変更前の記録`previous`を付けたもの |
 
-- すべて読み取り専用で、MCPのツール注釈`readOnlyHint: true`で示します。未知の引数はエラーになります。Google APIは呼ばず、取り込み済みのデータだけを読みます。
+- `create_article`・`update_article`・`create_record`・`update_record`のほかは読み取り専用で、MCPのツール注釈`readOnlyHint: true`で示します。未知の引数はエラーになります。Google APIは呼ばず、取り込み済みのデータだけを読みます。
+- 記事と記録のツールは[記事と記録](#記事と記録)のREST APIと同じ検証を行い、同じメッセージを返します。一覧の絞り込みの規則も同じです。削除のツールはありません。
+- 変更のツールは指定した項目だけを変え、`tags`・`note`・`content`は値全体を、`article_ids`は関連付けの全体を置き換えます。変更の履歴は残らないため、変更前の値`previous`を返します。誤って上書きしたときは、会話に残った`previous`から戻せます。
+- `get_article`の`search_console_page`と`ga4_landing_page`は、`query_search_performance`の`page`と`query_landing_sessions`の`landing_page`に使うための値です。リダイレクト、末尾のスラッシュ、クエリ文字列のために、Search ConsoleのURLやGA4のパスが記事のURLと異なることがあります。
 - 期間は開始日と終了日を含みます。期間は400日まで、`query_search_performance`の`group_by`が`query`・`page_query`のときは100日までです。比較する期間にも同じ上限があります。
 - 読むのは今のプロパティの行だけです。プロパティが未設定のサイトには`not_configured`を返します。
 - 各行は、キー（`page`、`query`、`landing_page`、`channel_group`、`date`）と指標の合計です。`query_search_performance`の`ctr`は合計クリック数 ÷ 合計表示回数（小数第4位まで）、`position`は表示回数で重み付けした平均掲載順位（小数第1位まで）で、表示回数が0なら`null`です。並びは`order_by`の降順、同じ値はキーの昇順です。`group_by`が`date`のときは日付の昇順で、`limit`に関係なく期間内のデータがある日をすべて返します。
@@ -218,14 +332,16 @@
 - 比較する期間を指定すると、各行と`totals`に`previous`（比較期間の値）を付けます。比較期間にそのキーの行がなければ`previous`の各値は`null`です。`group_by`が`date`のときは比較できません。
 - `coverage`は`{ "current", "previous" }`で、それぞれの期間の`days`（日数）、`available_days`（取得済み）、`provisional_days`（速報値）、`truncated_days`（打ち切り）、`refreshing_days`（取得済みで取り直しを待っているか実行中）、`missing_dates`（取得済みでない日。昇順に最大31件、超えたら`missing_dates_truncated`が`true`）、`time_zone`を返します。未取得の日を成果の悪化と取り違えないためです。
 - `notes`は集計を読むときの注意です（Search Consoleの日付は太平洋時間、クエリ別の値は匿名化クエリを含まない、行数の上限による打ち切り、GA4の日付とキーイベントの意味）。
-- サイトの名前とURL、ページ、クエリ、ランディングページ、チャネルは外部や利用者が入力したデータです。ツールの説明にも、指示として扱わないよう記載しています。
+- サイトの名前とURL、ページ、クエリ、ランディングページ、チャネル、記事・記録のタイトル・URL・メモ・内容・タグは外部や利用者・AIが入力したデータです。ツールの説明にも、指示として扱わないよう記載しています。書き込むツールの説明には、会話で利用者が求めた内容だけを書き込むよう記載しています。
 
 ツールのエラーは`{ "error": { "code", "message" } }`で返します。
 
 | コード | 条件 |
 | --- | --- |
-| `invalid_argument` | 日付の形式、開始日と終了日の順序、期間の上限、比較する期間の片方だけの指定、引数の組み合わせが正しくない |
-| `not_found` | サイトが見つからない |
+| `invalid_argument` | 日付の形式、開始日と終了日の順序、期間の上限、比較する期間の片方だけの指定、引数の組み合わせが正しくない。記事と記録の項目や絞り込みが規則に合わない |
+| `not_found` | サイト・記事・記録が見つからない |
+| `url_conflict` | 同じサイトに同じURLの記事がある |
+| `limit_exceeded` | 記事か記録が上限の件数ある |
 | `not_configured` | 集計するデータソースのプロパティが設定されていない |
 | `internal_error` | サーバーでエラーが発生した |
 

@@ -1,7 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GoogleStatus, Site, SyncStatus, User } from "../../src/api/types";
+import type {
+  Article,
+  ArticleSummary,
+  GoogleStatus,
+  RecordList,
+  Site,
+  SiteRecord,
+  SyncStatus,
+  TagList,
+  User,
+} from "../../src/api/types";
 import { createApiClient, createApiFetch } from "./api";
-import { loadMe, loadSiteDetail, loadSites, loadSyncPanel, loadUsersView } from "./load";
+import {
+  loadArticleDetail,
+  loadArticlesView,
+  loadMe,
+  loadRecordDetail,
+  loadRecordPage,
+  loadRecordsView,
+  loadSiteDetail,
+  loadSites,
+  loadSyncPanel,
+  loadUsersView,
+} from "./load";
 
 type Reply = () => Response;
 
@@ -175,5 +196,140 @@ describe("loadSyncPanel", () => {
     const { client, fetch } = setup({});
     expect(await loadSyncPanel(client, "a/b")).toEqual({ kind: "notFound" });
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+const ARTICLE: Article = {
+  id: "art_01JC9Z8Q4R6T2V7W3X5Y1A0B2C",
+  site_id: SITE.id,
+  title: "Guide",
+  url: "https://blog.example.com/guide",
+  published_on: "2026-10-01",
+  tags: ["topic:ai"],
+  note: "memo",
+  created_at: 1,
+  updated_at: 2,
+};
+const { note: _note, ...SUMMARY } = ARTICLE;
+const ARTICLE_SUMMARY: ArticleSummary = SUMMARY;
+const TAGS: TagList = { tags: [{ tag: "topic:ai", articles: 1, records: 0 }], truncated: false };
+const RECORD: SiteRecord = {
+  id: "rec_01JC9Z8Q4R6T2V7W3X5Y1A0B2C",
+  site_id: SITE.id,
+  kind: "action",
+  status: "done",
+  title: "Rewrite",
+  date: "2026-10-02",
+  period_start: null,
+  period_end: null,
+  tags: [],
+  content: "",
+  articles: [{ id: ARTICLE.id, title: "Guide", url: ARTICLE.url }],
+  created_at: 1,
+  updated_at: 2,
+};
+const RECORD_LIST: RecordList = {
+  records: [{ ...RECORD, articles: [{ id: ARTICLE.id, title: "Guide" }] }].map(({ content: _content, ...rest }) => rest),
+  next_offset: null,
+};
+
+describe("loadArticlesView", () => {
+  const siteUrl = `/api/v1/sites/${SITE.id}`;
+
+  it("returns the site, the articles filtered by the tag and the tags", async () => {
+    const { client } = setup({
+      [siteUrl]: [json(200, SITE)],
+      [`${siteUrl}/articles?tag=topic%3Aai`]: [json(200, { articles: [ARTICLE_SUMMARY] })],
+      [`${siteUrl}/tags`]: [json(200, TAGS)],
+    });
+    expect(await loadArticlesView(client, SITE.id, "topic:ai")).toEqual({
+      kind: "ready",
+      data: { site: SITE, articles: [ARTICLE_SUMMARY], tags: TAGS },
+    });
+  });
+
+  it("is not found when the site is gone, and without sending for an invalid ID", async () => {
+    const { client } = setup({
+      [siteUrl]: [apiError(404, "サイトが見つかりません")],
+      [`${siteUrl}/articles`]: [apiError(404, "サイトが見つかりません")],
+      [`${siteUrl}/tags`]: [apiError(404, "サイトが見つかりません")],
+    });
+    expect(await loadArticlesView(client, SITE.id, null)).toEqual({ kind: "notFound" });
+    const invalid = setup({});
+    expect(await loadArticlesView(invalid.client, "a/b", null)).toEqual({ kind: "notFound" });
+    expect(invalid.fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("loadArticleDetail", () => {
+  it("returns the article and its site", async () => {
+    const { client } = setup({
+      [`/api/v1/articles/${ARTICLE.id}`]: [json(200, ARTICLE)],
+      [`/api/v1/sites/${SITE.id}`]: [json(200, SITE)],
+    });
+    expect(await loadArticleDetail(client, ARTICLE.id)).toEqual({ kind: "ready", data: { article: ARTICLE, site: SITE } });
+  });
+
+  it("is not found on 404", async () => {
+    const { client } = setup({ [`/api/v1/articles/${ARTICLE.id}`]: [apiError(404, "記事が見つかりません")] });
+    expect(await loadArticleDetail(client, ARTICLE.id)).toEqual({ kind: "notFound" });
+  });
+});
+
+describe("loadRecordPage", () => {
+  it("sends the query and returns the page", async () => {
+    const { client } = setup({
+      [`/api/v1/sites/${SITE.id}/records?article_id=${ARTICLE.id}&limit=50&offset=50`]: [json(200, RECORD_LIST)],
+    });
+    expect(await loadRecordPage(client, SITE.id, { article_id: ARTICLE.id, limit: "50", offset: "50" })).toEqual({
+      kind: "ready",
+      data: RECORD_LIST,
+    });
+  });
+
+  it("is an error with the API message on 400", async () => {
+    const { client } = setup({ [`/api/v1/sites/${SITE.id}/records?kind=x`]: [apiError(400, "絞り込みの条件 kind が正しくありません")] });
+    expect(await loadRecordPage(client, SITE.id, { kind: "x" })).toEqual({
+      kind: "error",
+      message: "絞り込みの条件 kind が正しくありません",
+    });
+  });
+});
+
+describe("loadRecordsView", () => {
+  it("returns the site, the first page, the tags and the articles", async () => {
+    const siteUrl = `/api/v1/sites/${SITE.id}`;
+    const { client } = setup({
+      [siteUrl]: [json(200, SITE)],
+      [`${siteUrl}/records?kind=action`]: [json(200, RECORD_LIST)],
+      [`${siteUrl}/tags`]: [json(200, TAGS)],
+      [`${siteUrl}/articles`]: [json(200, { articles: [ARTICLE_SUMMARY] })],
+    });
+    expect(await loadRecordsView(client, SITE.id, { kind: "action" })).toEqual({
+      kind: "ready",
+      data: { site: SITE, records: RECORD_LIST, tags: TAGS, articles: [ARTICLE_SUMMARY] },
+    });
+  });
+});
+
+describe("loadRecordDetail", () => {
+  it("returns the record, its site and the articles of the site", async () => {
+    const { client } = setup({
+      [`/api/v1/records/${RECORD.id}`]: [json(200, RECORD)],
+      [`/api/v1/sites/${SITE.id}`]: [json(200, SITE)],
+      [`/api/v1/sites/${SITE.id}/articles`]: [json(200, { articles: [ARTICLE_SUMMARY] })],
+    });
+    expect(await loadRecordDetail(client, RECORD.id)).toEqual({
+      kind: "ready",
+      data: { record: RECORD, site: SITE, articles: [ARTICLE_SUMMARY] },
+    });
+  });
+
+  it("is not found on 404 and without sending for an invalid ID", async () => {
+    const { client } = setup({ [`/api/v1/records/${RECORD.id}`]: [apiError(404, "記録が見つかりません")] });
+    expect(await loadRecordDetail(client, RECORD.id)).toEqual({ kind: "notFound" });
+    const invalid = setup({});
+    expect(await loadRecordDetail(invalid.client, "a.b")).toEqual({ kind: "notFound" });
+    expect(invalid.fetch).not.toHaveBeenCalled();
   });
 });

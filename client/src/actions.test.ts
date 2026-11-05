@@ -1,14 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Site, User } from "../../src/api/types";
+import type { Article, Site, SiteRecord, User } from "../../src/api/types";
 import {
   changeUserRole,
+  createArticle,
+  createRecord,
   createSite,
   createUser,
+  deleteArticle,
+  deleteRecord,
   deleteSite,
   deleteUser,
   resetUserPassword,
   requestSync,
   revokeUserSessions,
+  updateArticle,
+  updateRecord,
   updateSite,
 } from "./actions";
 import { createApiClient, createApiFetch } from "./api";
@@ -326,6 +332,127 @@ describe("requestSync", () => {
   it("is an error without sending for an invalid ID", async () => {
     const { client, fetch } = setup(() => new Response(null, { status: 202 }), 401, url);
     expect(await requestSync(client, "../users/u1", input)).toEqual({ kind: "error", message: "サイトが見つかりません" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+const ITEM_SITE_ID = "site_01JC9Z8Q4R6T2V7W3X5Y1A0B2C";
+const ARTICLE: Article = {
+  id: "art_01JC9Z8Q4R6T2V7W3X5Y1A0B2C",
+  site_id: ITEM_SITE_ID,
+  title: "Guide",
+  url: null,
+  published_on: null,
+  tags: [],
+  note: "",
+  created_at: 1,
+  updated_at: 1,
+};
+const RECORD: SiteRecord = {
+  id: "rec_01JC9Z8Q4R6T2V7W3X5Y1A0B2C",
+  site_id: ITEM_SITE_ID,
+  kind: "note",
+  status: "done",
+  title: "Memo",
+  date: null,
+  period_start: null,
+  period_end: null,
+  tags: [],
+  content: "",
+  articles: [],
+  created_at: 1,
+  updated_at: 1,
+};
+
+describe("createArticle", () => {
+  const url = `/api/v1/sites/${ITEM_SITE_ID}/articles`;
+  const input = { title: "Guide", url: null, published_on: null, tags: [], note: "" };
+
+  it("sends the input and is ok with the article on 201", async () => {
+    const { client, fetch } = setup(() => Response.json(ARTICLE, { status: 201 }), 401, url);
+    expect(await createArticle(client, ITEM_SITE_ID, input)).toEqual({ kind: "ok", item: ARTICLE });
+    const init = fetch.mock.calls[0]?.[1];
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual(input);
+  });
+
+  it("is an error with the server's message on 409, not found on 404 and unknown when fetch rejects", async () => {
+    expect(await createArticle(setup(apiError(409, "重複"), 401, url).client, ITEM_SITE_ID, input)).toEqual({
+      kind: "error",
+      message: "重複",
+    });
+    expect(await createArticle(setup(apiError(404, "なし"), 401, url).client, ITEM_SITE_ID, input)).toEqual({
+      kind: "notFound",
+    });
+    expect(
+      await createArticle(setup(() => Promise.reject(new TypeError("offline")), 401, url).client, ITEM_SITE_ID, input),
+    ).toEqual({ kind: "unknown" });
+  });
+
+  it("is an error without sending for an invalid ID", async () => {
+    const { client, fetch } = setup(() => Response.json(ARTICLE), 401, url);
+    expect(await createArticle(client, "a/b", input)).toEqual({ kind: "error", message: "サイトが見つかりません" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("updateArticle and deleteArticle", () => {
+  const url = `/api/v1/articles/${ARTICLE.id}`;
+
+  it("sends a PATCH and is ok with the article", async () => {
+    const { client, fetch } = setup(() => Response.json({ ...ARTICLE, title: "New" }), 401, url);
+    expect(await updateArticle(client, ARTICLE.id, { title: "New" })).toEqual({ kind: "ok", item: { ...ARTICLE, title: "New" } });
+    expect(fetch.mock.calls[0]?.[1]?.method).toBe("PATCH");
+  });
+
+  it("sends a DELETE and is ok on 204, not found on 404", async () => {
+    const { client, fetch } = setup(() => new Response(null, { status: 204 }), 401, url);
+    expect(await deleteArticle(client, ARTICLE.id)).toEqual({ kind: "ok" });
+    expect(fetch.mock.calls[0]?.[1]?.method).toBe("DELETE");
+    expect(await deleteArticle(setup(apiError(404, "記事が見つかりません"), 401, url).client, ARTICLE.id)).toEqual({
+      kind: "notFound",
+    });
+  });
+
+  it("is an error without sending for an invalid ID", async () => {
+    const { client, fetch } = setup(() => Response.json(ARTICLE), 401, url);
+    expect(await updateArticle(client, "a/b", { title: "x" })).toEqual({ kind: "error", message: "記事が見つかりません" });
+    expect(await deleteArticle(client, "a/b")).toEqual({ kind: "error", message: "記事が見つかりません" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("record actions", () => {
+  it("creates a record", async () => {
+    const url = `/api/v1/sites/${ITEM_SITE_ID}/records`;
+    const { client, fetch } = setup(() => Response.json(RECORD, { status: 201 }), 401, url);
+    expect(await createRecord(client, ITEM_SITE_ID, { kind: "note", title: "Memo" })).toEqual({ kind: "ok", item: RECORD });
+    expect(fetch.mock.calls[0]?.[1]?.method).toBe("POST");
+  });
+
+  it("changes and deletes a record", async () => {
+    const url = `/api/v1/records/${RECORD.id}`;
+    const updated = setup(() => Response.json({ ...RECORD, status: "canceled" }), 401, url);
+    expect(await updateRecord(updated.client, RECORD.id, { status: "canceled" })).toEqual({
+      kind: "ok",
+      item: { ...RECORD, status: "canceled" },
+    });
+    expect(updated.fetch.mock.calls[0]?.[1]?.method).toBe("PATCH");
+    const deleted = setup(() => new Response(null, { status: 204 }), 401, url);
+    expect(await deleteRecord(deleted.client, RECORD.id)).toEqual({ kind: "ok" });
+    expect(await deleteRecord(setup(apiError(404, "記録が見つかりません"), 401, url).client, RECORD.id)).toEqual({
+      kind: "notFound",
+    });
+  });
+
+  it("is an error without sending for an invalid ID", async () => {
+    const { client, fetch } = setup(() => Response.json(RECORD), 401, "/");
+    expect(await updateRecord(client, "a/b", { title: "x" })).toEqual({ kind: "error", message: "記録が見つかりません" });
+    expect(await deleteRecord(client, "a/b")).toEqual({ kind: "error", message: "記録が見つかりません" });
+    expect(await createRecord(client, "a/b", { kind: "note", title: "x" })).toEqual({
+      kind: "error",
+      message: "サイトが見つかりません",
+    });
     expect(fetch).not.toHaveBeenCalled();
   });
 });

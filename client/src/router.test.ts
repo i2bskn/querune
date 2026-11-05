@@ -21,6 +21,28 @@ describe("matchRoute", () => {
     expect(matchRoute(`/sites/${id}?x=1`)).toEqual({ name: "siteDetail", id });
   });
 
+  it("matches the article and record screens", () => {
+    const site = "site_01JC9Z8Q4R6T2V7W3X5Y1A0B2C";
+    const article = "art_01JC9Z8Q4R6T2V7W3X5Y1A0B2C";
+    const record = "rec_01JC9Z8Q4R6T2V7W3X5Y1A0B2C";
+    expect(matchRoute(`/sites/${site}/articles`)).toEqual({ name: "siteArticles", id: site });
+    expect(matchRoute(`/sites/${site}/articles?tag=a`)).toEqual({ name: "siteArticles", id: site });
+    expect(matchRoute(`/sites/${site}/records?article=${article}`)).toEqual({ name: "siteRecords", id: site });
+    expect(matchRoute(`/articles/${article}`)).toEqual({ name: "articleDetail", id: article });
+    expect(matchRoute(`/records/${record}`)).toEqual({ name: "recordDetail", id: record });
+    for (const path of [
+      "/articles",
+      "/articles/",
+      "/records/a.b",
+      `/articles/${article}/x`,
+      `/sites/${site}/tags`,
+      `/sites/${site}/articles/`,
+      "/sites/a.b/records",
+    ]) {
+      expect(matchRoute(path)).toEqual({ name: "notFound" });
+    }
+  });
+
   it.each([
     "/sites/",
     "/sites/a/b",

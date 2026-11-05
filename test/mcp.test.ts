@@ -272,6 +272,9 @@ describe("GET /authorize", () => {
     expect(consent.html).toContain(
       "このQueruneに登録されたサイトの一覧と、取り込んだ Search Console・GA4 の集計と取り込みの状況を読み取れるようになります。",
     );
+    expect(consent.html).toContain(
+      "サイトの記事と記録（施策・レビュー・メモ）を読み取り、登録・編集できるようになります。このアプリから削除はできません。",
+    );
     const res = await send(authorizeUrl(ORIGIN, consent.clientId, (await pkce()).challenge), {
       cookies: memberCookies,
     });

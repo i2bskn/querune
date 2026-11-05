@@ -1,5 +1,17 @@
 import { useEffect, useState } from "react";
-import type { GoogleStatus, Site, SyncStatus, User, UserList } from "../../src/api/types";
+import type {
+  Article,
+  ArticleSummary,
+  GoogleStatus,
+  RecordList,
+  RecordListQuery,
+  Site,
+  SiteRecord,
+  SyncStatus,
+  TagList,
+  User,
+  UserList,
+} from "../../src/api/types";
 import { isValidId } from "./router";
 import {
   LoginRequiredError,
@@ -119,6 +131,91 @@ export async function loadSyncPanel(client: ApiClient, id: string): Promise<Load
   ]);
   if (google.kind !== "ok" || status.kind !== "ok") return failure([google, status]);
   return { kind: "ready", data: { google: google.value, status: status.value } };
+}
+
+export type ArticlesData = { site: Site; articles: ArticleSummary[]; tags: TagList };
+
+// The articles of a site, filtered by tag when it is not null, with the tags of the site for the filter.
+export async function loadArticlesView(client: ApiClient, siteId: string, tag: string | null): Promise<Loaded<ArticlesData>> {
+  if (!isValidId(siteId)) return { kind: "notFound" };
+  const param = { id: siteId };
+  const [site, articles, tags] = await Promise.all([
+    request(() => client.api.v1.sites[":id"].$get({ param })),
+    request(() => client.api.v1.sites[":id"].articles.$get({ param, query: tag === null ? {} : { tag } })),
+    request(() => client.api.v1.sites[":id"].tags.$get({ param })),
+  ]);
+  if (site.kind !== "ok" || articles.kind !== "ok" || tags.kind !== "ok") return failure([site, articles, tags]);
+  return { kind: "ready", data: { site: site.value, articles: articles.value.articles, tags: tags.value } };
+}
+
+export type ArticleDetailData = { article: Article; site: Site };
+
+// One article and its site. A deleted article is not found.
+export async function loadArticleDetail(client: ApiClient, id: string): Promise<Loaded<ArticleDetailData>> {
+  if (!isValidId(id)) return { kind: "notFound" };
+  const article = await request(() => client.api.v1.articles[":id"].$get({ param: { id } }));
+  if (article.kind !== "ok") return failure([article]);
+  const siteId = article.value.site_id;
+  if (!isValidId(siteId)) return { kind: "error", message: unexpectedResponseMessage(200) };
+  const site = await request(() => client.api.v1.sites[":id"].$get({ param: { id: siteId } }));
+  if (site.kind !== "ok") return failure([site]);
+  return { kind: "ready", data: { article: article.value, site: site.value } };
+}
+
+// One page of the records of a site.
+export async function loadRecordPage(
+  client: ApiClient,
+  siteId: string,
+  query: RecordListQuery,
+): Promise<Loaded<RecordList>> {
+  if (!isValidId(siteId)) return { kind: "notFound" };
+  const page = await request(() => client.api.v1.sites[":id"].records.$get({ param: { id: siteId }, query }));
+  if (page.kind !== "ok") return failure([page]);
+  return { kind: "ready", data: page.value };
+}
+
+export type RecordsData = { site: Site; records: RecordList; tags: TagList; articles: ArticleSummary[] };
+
+// The first page of the records of a site with the filters of query, the tags for the filter and the articles for
+// the form.
+export async function loadRecordsView(
+  client: ApiClient,
+  siteId: string,
+  query: RecordListQuery,
+): Promise<Loaded<RecordsData>> {
+  if (!isValidId(siteId)) return { kind: "notFound" };
+  const param = { id: siteId };
+  const [site, records, tags, articles] = await Promise.all([
+    request(() => client.api.v1.sites[":id"].$get({ param })),
+    request(() => client.api.v1.sites[":id"].records.$get({ param, query })),
+    request(() => client.api.v1.sites[":id"].tags.$get({ param })),
+    request(() => client.api.v1.sites[":id"].articles.$get({ param, query: {} })),
+  ]);
+  if (site.kind !== "ok" || records.kind !== "ok" || tags.kind !== "ok" || articles.kind !== "ok") {
+    return failure([site, records, tags, articles]);
+  }
+  return {
+    kind: "ready",
+    data: { site: site.value, records: records.value, tags: tags.value, articles: articles.value.articles },
+  };
+}
+
+export type RecordDetailData = { record: SiteRecord; site: Site; articles: ArticleSummary[] };
+
+// One record, its site and the articles of the site for the form. A deleted record is not found.
+export async function loadRecordDetail(client: ApiClient, id: string): Promise<Loaded<RecordDetailData>> {
+  if (!isValidId(id)) return { kind: "notFound" };
+  const record = await request(() => client.api.v1.records[":id"].$get({ param: { id } }));
+  if (record.kind !== "ok") return failure([record]);
+  const siteId = record.value.site_id;
+  if (!isValidId(siteId)) return { kind: "error", message: unexpectedResponseMessage(200) };
+  const param = { id: siteId };
+  const [site, articles] = await Promise.all([
+    request(() => client.api.v1.sites[":id"].$get({ param })),
+    request(() => client.api.v1.sites[":id"].articles.$get({ param, query: {} })),
+  ]);
+  if (site.kind !== "ok" || articles.kind !== "ok") return failure([site, articles]);
+  return { kind: "ready", data: { record: record.value, site: site.value, articles: articles.value.articles } };
 }
 
 // Loads a screen's data while the component is mounted, and again when key changes or reload is called.

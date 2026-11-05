@@ -5,9 +5,13 @@ import { loadMe, useView } from "./load";
 import { type Route, matchRoute, usePath } from "./router";
 import { markLeaving } from "./unload";
 import { LoadError, NotFound, useDocumentTitle } from "./views/common";
+import { ArticleDetailView } from "./views/ArticleDetailView";
+import { ArticlesView } from "./views/ArticlesView";
 import { ErrorBoundary } from "./views/ErrorBoundary";
 import { HomeView } from "./views/HomeView";
 import { AppShell } from "./views/Sidebar";
+import { RecordDetailView } from "./views/RecordDetailView";
+import { RecordsView } from "./views/RecordsView";
 import { SiteDetailView } from "./views/SiteDetailView";
 import { SitesView } from "./views/SitesView";
 import { UsersView } from "./views/UsersView";
@@ -46,7 +50,7 @@ export function App() {
           <div className="layout">
             <div className="layout-screen">
               <ErrorBoundary key={path}>
-                <Screen route={route} user={me.data} />
+                <Screen route={route} user={me.data} path={path} />
               </ErrorBoundary>
             </div>
           </div>
@@ -55,7 +59,7 @@ export function App() {
   }
 }
 
-function Screen({ route, user }: { route: Route; user: User }) {
+function Screen({ route, user, path }: { route: Route; user: User; path: string }) {
   switch (route.name) {
     case "home":
       return <HomeView client={client} />;
@@ -63,6 +67,14 @@ function Screen({ route, user }: { route: Route; user: User }) {
       return <SitesView client={client} />;
     case "siteDetail":
       return <SiteDetailView client={client} id={route.id} />;
+    case "siteArticles":
+      return <ArticlesView client={client} siteId={route.id} path={path} />;
+    case "siteRecords":
+      return <RecordsView client={client} siteId={route.id} path={path} />;
+    case "articleDetail":
+      return <ArticleDetailView client={client} id={route.id} />;
+    case "recordDetail":
+      return <RecordDetailView client={client} id={route.id} />;
     case "users":
       return <UsersView client={client} currentUserId={user.id} />;
     case "notFound":

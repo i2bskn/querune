@@ -24,10 +24,10 @@ export function ConsentPage(props: { details: ConsentDescription; handle: string
         </p>
       ) : null}
       <p>ログイン中のユーザー: {props.email}</p>
-      {/* Keep this in line with the tools of src/mcp/tools.ts. */}
+      {/* Keep this in line with the tools of src/mcp/tools.ts and src/mcp/record-tools.ts. */}
       <p>
         許可すると、このアプリはあなたとして、このQueruneに登録されたサイトの一覧と、取り込んだ Search Console・GA4
-        の集計と取り込みの状況を読み取れるようになります。
+        の集計と取り込みの状況を読み取れるようになります。また、サイトの記事と記録（施策・レビュー・メモ）を読み取り、登録・編集できるようになります。このアプリから削除はできません。
       </p>
       <form method="post" action="/authorize">
         <input type="hidden" name="handle" value={props.handle} />
