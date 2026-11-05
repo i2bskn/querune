@@ -1,13 +1,32 @@
 import { Hono, type Context } from "hono";
-import { asc, eq } from "drizzle-orm";
-import type { CreateSiteRequest, Site, SiteList, UpdateSiteRequest } from "../api/types";
-import { apiError, requireUser } from "../auth/middleware";
+import { and, asc, eq, inArray } from "drizzle-orm";
+import type { BatchItem } from "drizzle-orm/batch";
+import type {
+  CreateSiteRequest,
+  Site,
+  SiteList,
+  SyncRequest,
+  SyncResponse,
+  UpdateSiteRequest,
+} from "../api/types";
+import { apiError, describeError, requireUser } from "../auth/middleware";
 import { isUniqueViolation } from "../auth/users";
 import { clock } from "../clock";
 import type { Db } from "../db/client";
-import { sites, type SiteRow } from "../db/schema";
+import { DATASETS, pendingPurges, sites, syncDays, type SiteRow } from "../db/schema";
 import type { AppEnv } from "../env";
-import { newSiteId, SITE_ID_PATTERN } from "../ids";
+import { parseServiceAccountKey } from "../google/credentials";
+import { newSiteId, newUlid, SITE_ID_PATTERN } from "../ids";
+import { datesBetween, daysBetween, isValidDate, subtractMonths, todayUtc } from "../sync/dates";
+import {
+  datasetsOf,
+  EnqueueError,
+  enqueueSync,
+  type Dataset,
+  type SyncCandidate,
+  type SyncMessage,
+} from "../sync/enqueue";
+import { getSyncStatus } from "../sync/status";
 import { jsonBody, normalizeDisplayName, unknownField } from "./api";
 
 export const MAX_SITES = 100;
@@ -141,6 +160,44 @@ export function toApiSite(row: SiteRow): Site {
   };
 }
 
+// POST /:id/sync, after validation.
+type SyncInput = { startDate: string; endDate: string };
+
+const SYNC_FIELDS = ["start_date", "end_date"];
+// The most days imported by one request, both ends included.
+export const MAX_SYNC_DAYS = 90;
+// Search Console keeps about 16 months of data.
+const GSC_RETENTION_MONTHS = 16;
+
+const syncBody = jsonBody<SyncRequest, SyncInput>((body, c) => {
+  const unknown = unknownField(body, SYNC_FIELDS);
+  if (unknown !== null) return apiError(c, 400, "unknown_field", `未知の項目があります: ${unknown}`);
+  const { start_date: startDate, end_date: endDate } = body;
+  if (!isValidDate(startDate) || !isValidDate(endDate)) {
+    return apiError(c, 400, "invalid_date", "日付は YYYY-MM-DD の形式で入力してください");
+  }
+  if (startDate > endDate) return apiError(c, 400, "invalid_range", "開始日は終了日以前にしてください");
+  if (endDate > todayUtc(clock.now())) return apiError(c, 400, "invalid_range", "終了日は今日以前にしてください");
+  if (daysBetween(startDate, endDate) > MAX_SYNC_DAYS) {
+    return apiError(c, 400, "invalid_range", "一度に取り込める期間は 90 日までです");
+  }
+  return { ok: true, value: { startDate, endDate } };
+});
+
+function propertiesOf(row: SiteRow) {
+  return { id: row.id, gscProperty: row.gscProperty, ga4PropertyId: row.ga4PropertyId };
+}
+
+// Sends the messages of new purges. A failure is only logged: the daily cron sends them again.
+async function sendPurges(queue: Queue<SyncMessage>, ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  try {
+    await queue.sendBatch(ids.map((purgeId) => ({ body: { kind: "purge", purgeId } satisfies SyncMessage })));
+  } catch (error) {
+    console.error("sending purges failed", { purgeIds: ids, ...describeError(error) });
+  }
+}
+
 // Every site, by name, then by ID.
 export function listSites(db: Db): Promise<SiteRow[]> {
   return db.select().from(sites).orderBy(asc(sites.name), asc(sites.id)).all();
@@ -195,29 +252,144 @@ const sitesApi = new Hono<AppEnv>()
     const input = c.req.valid("json");
     const db = c.get("db");
     const id = c.req.param("id");
-    if (!SITE_ID_PATTERN.test(id) || !(await findSite(db, id))) {
-      return apiError(c, 404, "not_found", siteNotFound);
+    const current = SITE_ID_PATTERN.test(id) ? await findSite(db, id) : undefined;
+    if (!current) return apiError(c, 404, "not_found", siteNotFound);
+    const now = clock.now();
+    // The datasets whose property changes, with the property before the change.
+    const changes: { datasets: Dataset[]; before: string | null }[] = [];
+    if (input.gscProperty !== undefined && input.gscProperty !== current.gscProperty) {
+      changes.push({ datasets: ["gsc_pages", "gsc_queries"], before: current.gscProperty });
+    }
+    if (input.ga4PropertyId !== undefined && input.ga4PropertyId !== current.ga4PropertyId) {
+      changes.push({ datasets: ["ga4_landing_pages"], before: current.ga4PropertyId });
+    }
+    const purges: { id: string; siteId: string; dataset: Dataset; property: string; createdAt: number; attemptedAt: number }[] =
+      [];
+    for (const change of changes) {
+      if (change.before === null) continue;
+      for (const dataset of change.datasets) {
+        purges.push({ id: newUlid(now), siteId: id, dataset, property: change.before, createdAt: now, attemptedAt: now });
+      }
     }
     try {
-      await db
+      const update = db
         .update(sites)
-        .set({ ...input, updatedAt: clock.now() })
-        .where(eq(sites.id, id))
-        .run();
+        .set({ ...input, updatedAt: now })
+        .where(eq(sites.id, id));
+      if (changes.length === 0) {
+        await update.run();
+      } else {
+        // The days of the old property are forgotten with the change, and its rows are deleted later by the purges:
+        // reads use only the rows of the current property.
+        const statements: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] = [
+          update,
+          db
+            .delete(syncDays)
+            .where(and(eq(syncDays.siteId, id), inArray(syncDays.dataset, changes.flatMap((change) => change.datasets)))),
+        ];
+        if (purges.length > 0) statements.push(db.insert(pendingPurges).values(purges));
+        await db.batch(statements);
+      }
     } catch (error) {
       if (isUniqueViolation(error)) return apiError(c, 409, "url_conflict", urlConflictMessage);
       throw error;
     }
+    await sendPurges(
+      c.env.SYNC_QUEUE,
+      purges.map((purge) => purge.id),
+    );
     const updated = await findSite(db, id);
     if (!updated) return apiError(c, 404, "not_found", siteNotFound);
     return c.json(toApiSite(updated), 200);
   })
   .delete("/:id", async (c) => {
     const id = c.req.param("id");
-    if (!SITE_ID_PATTERN.test(id)) return apiError(c, 404, "not_found", siteNotFound);
-    const deleted = await c.get("db").delete(sites).where(eq(sites.id, id)).returning({ id: sites.id }).all();
-    if (deleted.length === 0) return apiError(c, 404, "not_found", siteNotFound);
+    const db = c.get("db");
+    if (!SITE_ID_PATTERN.test(id) || !(await findSite(db, id))) {
+      return apiError(c, 404, "not_found", siteNotFound);
+    }
+    const d1 = db.$client;
+    const now = clock.now();
+    const purgeIds = DATASETS.map(() => newUlid(now));
+    // The purges are inserted before the site is deleted, and only while it exists, so that a concurrent deletion
+    // leaves no purge behind. The imported rows are deleted later by the purges: deleting them here could exceed the
+    // D1 limits.
+    const results = await d1.batch([
+      ...DATASETS.map((dataset, i) =>
+        d1
+          .prepare(
+            `INSERT INTO pending_purges (id, site_id, dataset, property, created_at, attempted_at)
+            SELECT ?, ?, ?, NULL, ?, ? WHERE EXISTS (SELECT 1 FROM sites WHERE id = ?)`,
+          )
+          .bind(purgeIds[i], id, dataset, now, now, id),
+      ),
+      d1.prepare("DELETE FROM sync_days WHERE site_id = ?").bind(id),
+      d1.prepare("DELETE FROM sites WHERE id = ? RETURNING id").bind(id),
+    ]);
+    const deleted = results[results.length - 1]?.results.length ?? 0;
+    if (deleted === 0) return apiError(c, 404, "not_found", siteNotFound);
+    await sendPurges(
+      c.env.SYNC_QUEUE,
+      purgeIds.filter((_, i) => (results[i]?.meta.changes ?? 0) > 0),
+    );
     return c.body(null, 204);
+  })
+  .post("/:id/sync", syncBody, async (c) => {
+    const input = c.req.valid("json");
+    const db = c.get("db");
+    const id = c.req.param("id");
+    const site = SITE_ID_PATTERN.test(id) ? await findSite(db, id) : undefined;
+    if (!site) return apiError(c, 404, "not_found", siteNotFound);
+    const datasets = datasetsOf(propertiesOf(site));
+    if (datasets.length === 0) {
+      return apiError(c, 409, "not_configured", "Search Console か GA4 のプロパティを設定してください");
+    }
+    const account = await parseServiceAccountKey(c.env.GOOGLE_SERVICE_ACCOUNT_KEY);
+    if (!account.ok) {
+      if (account.error === "invalid") console.warn("google service account key is invalid", { reason: account.reason });
+      return apiError(
+        c,
+        409,
+        "google_not_configured",
+        account.error === "not_configured"
+          ? "サービスアカウントの鍵が設定されていません"
+          : "サービスアカウントの鍵を確認してください",
+      );
+    }
+    const now = clock.now();
+    // Days before this are outside the retention of Search Console.
+    const gscFrom = subtractMonths(todayUtc(now), GSC_RETENTION_MONTHS);
+    const candidates: SyncCandidate[] = [];
+    for (const date of datesBetween(input.startDate, input.endDate)) {
+      for (const dataset of datasets) {
+        if (dataset !== "ga4_landing_pages" && date < gscFrom) continue;
+        const property = dataset === "ga4_landing_pages" ? site.ga4PropertyId : site.gscProperty;
+        if (property === null) continue;
+        candidates.push({ siteId: site.id, dataset, date, property });
+      }
+    }
+    let queued;
+    try {
+      queued = await enqueueSync(db.$client, c.env.SYNC_QUEUE, candidates, { now, force: true });
+    } catch (error) {
+      if (!(error instanceof EnqueueError)) throw error;
+      console.error("enqueueing the import failed", { siteId: site.id, sent: error.sent, ...describeError(error.cause) });
+      return apiError(
+        c,
+        503,
+        "temporarily_unavailable",
+        "取り込みを依頼できませんでした。時間をおいてやり直してください",
+      );
+    }
+    const body: SyncResponse = { queued: queued.length, days: new Set(queued.map((row) => row.date)).size };
+    return c.json(body, 202);
+  })
+  .get("/:id/sync", async (c) => {
+    const id = c.req.param("id");
+    const db = c.get("db");
+    const site = SITE_ID_PATTERN.test(id) ? await findSite(db, id) : undefined;
+    if (!site) return apiError(c, 404, "not_found", siteNotFound);
+    return c.json(await getSyncStatus(db.$client, propertiesOf(site)), 200);
   });
 
 export default sitesApi;

@@ -1,6 +1,7 @@
 import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import type { Db } from "./db/client";
 import type { UserRow } from "./db/schema";
+import type { SyncMessage } from "./sync/enqueue";
 
 export type Bindings = {
   DB: D1Database;
@@ -16,6 +17,11 @@ export type Bindings = {
   OIDC_CLIENT_SECRET?: string;
   ALLOWED_EMAILS?: string;
   OIDC_REQUIRE_EMAIL_VERIFIED?: string;
+  // The imports of Search Console and GA4 (src/sync/).
+  SYNC_QUEUE: Queue<SyncMessage>;
+  // The JSON of a Google service account key. Optional: without it nothing is imported. Not part of loadConfig, so that
+  // a missing or invalid key never stops the rest of the app.
+  GOOGLE_SERVICE_ACCOUNT_KEY?: string;
 };
 
 export type AuthMode = "oidc" | "password";

@@ -6,6 +6,7 @@ import { sites, users, type SiteRow, type UserRow } from "../src/db/schema";
 import type { Bindings } from "../src/env";
 import worker from "../src/index";
 import { newSiteId } from "../src/ids";
+import type { SyncMessage } from "../src/sync/enqueue";
 
 export const ORIGIN = "https://querune.test";
 export const OIDC_ORIGIN = "https://wiki.example.com";
@@ -15,6 +16,11 @@ export const db = createDb(env.DB);
 
 export async function resetDb(): Promise<void> {
   await env.DB.batch([
+    env.DB.prepare("DELETE FROM gsc_page_daily"),
+    env.DB.prepare("DELETE FROM gsc_query_daily"),
+    env.DB.prepare("DELETE FROM ga4_landing_daily"),
+    env.DB.prepare("DELETE FROM sync_days"),
+    env.DB.prepare("DELETE FROM pending_purges"),
     env.DB.prepare("DELETE FROM sites"),
     env.DB.prepare("DELETE FROM sessions"),
     env.DB.prepare("DELETE FROM users"),
@@ -260,4 +266,109 @@ export async function createSite(
     .returning();
   if (!site) throw new Error("failed to create site");
   return site;
+}
+
+// A sync queue that records the messages sent to it. fail makes send and sendBatch throw; failAfter makes them throw
+// after that many successful calls.
+export type FakeQueue = Queue<SyncMessage> & {
+  messages: SyncMessage[];
+  calls: number;
+  fail: boolean;
+  failAfter: number | null;
+};
+
+export function fakeQueue(): FakeQueue {
+  const queue = {
+    messages: [] as SyncMessage[],
+    calls: 0,
+    fail: false,
+    failAfter: null as number | null,
+    check() {
+      if (queue.fail || (queue.failAfter !== null && queue.calls >= queue.failAfter)) throw new Error("queue is down");
+      queue.calls++;
+    },
+    async send(body: SyncMessage) {
+      queue.check();
+      queue.messages.push(body);
+    },
+    async sendBatch(messages: Iterable<MessageSendRequest<SyncMessage>>) {
+      queue.check();
+      for (const message of messages) queue.messages.push(message.body);
+    },
+    async metrics() {
+      return { backlogCount: 0, backlogBytes: 0 };
+    },
+  };
+  return queue as unknown as FakeQueue;
+}
+
+// A queue message that records ack and retry.
+export type FakeMessage = Message<unknown> & { acked: boolean; retried: { delaySeconds?: number } | null };
+
+export function fakeMessage(body: unknown, attempts = 1): FakeMessage {
+  const message = {
+    id: crypto.randomUUID(),
+    timestamp: new Date(),
+    body,
+    attempts,
+    acked: false,
+    retried: null as { delaySeconds?: number } | null,
+    ack() {
+      message.acked = true;
+    },
+    retry(options?: { delaySeconds?: number }) {
+      message.retried = options ?? {};
+    },
+  };
+  return message as unknown as FakeMessage;
+}
+
+export function fakeBatch(queue: string, messages: FakeMessage[]): MessageBatch<unknown> {
+  return {
+    queue,
+    messages,
+    ackAll() {
+      for (const message of messages) message.ack();
+    },
+    retryAll(options?: { delaySeconds?: number }) {
+      for (const message of messages) message.retry(options);
+    },
+  } as unknown as MessageBatch<unknown>;
+}
+
+// Counts the statements and batches that reach D1 (a batch counts as one query, as D1 counts it).
+export function d1Counting(): { d1: D1Database; count: () => number } {
+  let count = 0;
+  const d1 = new Proxy(env.DB, {
+    get(target, prop) {
+      if (prop === "prepare") {
+        return (query: string) => {
+          const statement = target.prepare(query);
+          const wrap = (bound: D1PreparedStatement): D1PreparedStatement =>
+            new Proxy(bound, {
+              get(statementTarget, statementProp) {
+                if (statementProp === "bind") {
+                  return (...values: unknown[]) => wrap(statementTarget.bind(...values));
+                }
+                if (statementProp === "all" || statementProp === "run" || statementProp === "first" || statementProp === "raw") {
+                  count++;
+                }
+                const value: unknown = Reflect.get(statementTarget, statementProp, statementTarget);
+                return typeof value === "function" ? value.bind(statementTarget) : value;
+              },
+            });
+          return wrap(statement);
+        };
+      }
+      if (prop === "batch") {
+        return (statements: D1PreparedStatement[]) => {
+          count++;
+          return target.batch(statements);
+        };
+      }
+      const value: unknown = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return { d1, count: () => count };
 }

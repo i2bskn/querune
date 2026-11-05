@@ -1,6 +1,9 @@
 import app from "./app";
+import { clock } from "./clock";
 import { loadConfig, type Bindings, type Config } from "./env";
 import { getOAuthProvider } from "./mcp/provider";
+import { handleSyncQueue } from "./sync/consumer";
+import { runDailySync } from "./sync/enqueue";
 
 export type { AppType } from "./app";
 
@@ -46,5 +49,27 @@ export default {
     // A shallow copy per request: OAuthProvider sets env.OAUTH_PROVIDER only when it is missing,
     // so a shared env would keep the helpers of the first origin.
     return getOAuthProvider(origin).fetch(request, { ...env }, ctx);
+  },
+
+  // The sync queue and its dead letter queue (src/sync/consumer.ts).
+  async queue(batch: MessageBatch<unknown>, env: Bindings): Promise<void> {
+    await handleSyncQueue(batch, env);
+  },
+
+  // The daily import (src/sync/enqueue.ts).
+  async scheduled(_controller: ScheduledController, env: Bindings, ctx: ExecutionContext): Promise<void> {
+    const result = loadConfig(env);
+    if (!result.ok) {
+      console.error("invalid configuration", { invalid: result.invalid });
+      return;
+    }
+    ctx.waitUntil(
+      runDailySync({
+        db: env.DB,
+        queue: env.SYNC_QUEUE,
+        now: clock.now(),
+        serviceAccountKey: env.GOOGLE_SERVICE_ACCOUNT_KEY,
+      }),
+    );
   },
 } satisfies ExportedHandler<Bindings>;

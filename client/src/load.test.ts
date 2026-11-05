@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Site, User } from "../../src/api/types";
+import type { GoogleStatus, Site, SyncStatus, User } from "../../src/api/types";
 import { createApiClient, createApiFetch } from "./api";
-import { loadMe, loadSiteDetail, loadSites, loadUsersView } from "./load";
+import { loadMe, loadSiteDetail, loadSites, loadSyncPanel, loadUsersView } from "./load";
 
 type Reply = () => Response;
 
@@ -141,6 +141,39 @@ describe("loadSiteDetail", () => {
   it("is not found for an invalid ID without sending", async () => {
     const { client, fetch } = setup({});
     expect(await loadSiteDetail(client, "a/b")).toEqual({ kind: "notFound" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("loadSyncPanel", () => {
+  const GOOGLE: GoogleStatus = { configured: true, client_email: "querune@project.iam.gserviceaccount.com", error: null };
+  const STATUS: SyncStatus = { site_id: SITE.id, datasets: [] };
+  const statusUrl = `/api/v1/sites/${SITE.id}/sync`;
+
+  it("returns the service account and the import state", async () => {
+    const { client } = setup({ "/api/v1/google": [json(200, GOOGLE)], [statusUrl]: [json(200, STATUS)] });
+    expect(await loadSyncPanel(client, SITE.id)).toEqual({ kind: "ready", data: { google: GOOGLE, status: STATUS } });
+  });
+
+  it("is not found when the site is gone", async () => {
+    const { client } = setup({
+      "/api/v1/google": [json(200, GOOGLE)],
+      [statusUrl]: [apiError(404, "サイトが見つかりません")],
+    });
+    expect(await loadSyncPanel(client, SITE.id)).toEqual({ kind: "notFound" });
+  });
+
+  it("is an error with the API message otherwise", async () => {
+    const { client } = setup({
+      "/api/v1/google": [apiError(500, "サーバーでエラーが発生しました")],
+      [statusUrl]: [json(200, STATUS)],
+    });
+    expect(await loadSyncPanel(client, SITE.id)).toEqual({ kind: "error", message: "サーバーでエラーが発生しました" });
+  });
+
+  it("is not found for an invalid ID without sending", async () => {
+    const { client, fetch } = setup({});
+    expect(await loadSyncPanel(client, "a/b")).toEqual({ kind: "notFound" });
     expect(fetch).not.toHaveBeenCalled();
   });
 });

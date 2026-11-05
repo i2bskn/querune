@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Site, User, UserList } from "../../src/api/types";
+import type { GoogleStatus, Site, SyncStatus, User, UserList } from "../../src/api/types";
 import { isValidId } from "./router";
 import {
   LoginRequiredError,
@@ -106,6 +106,19 @@ export async function loadSiteDetail(client: ApiClient, id: string): Promise<Loa
   const site = await request(() => client.api.v1.sites[":id"].$get({ param: { id } }));
   if (site.kind !== "ok") return failure([site]);
   return { kind: "ready", data: site.value };
+}
+
+export type SyncPanelData = { google: GoogleStatus; status: SyncStatus };
+
+// The data import of a site: the service account and the import state. A deleted site is not found.
+export async function loadSyncPanel(client: ApiClient, id: string): Promise<Loaded<SyncPanelData>> {
+  if (!isValidId(id)) return { kind: "notFound" };
+  const [google, status] = await Promise.all([
+    request(() => client.api.v1.google.$get()),
+    request(() => client.api.v1.sites[":id"].sync.$get({ param: { id } })),
+  ]);
+  if (google.kind !== "ok" || status.kind !== "ok") return failure([google, status]);
+  return { kind: "ready", data: { google: google.value, status: status.value } };
 }
 
 // Loads a screen's data while the component is mounted, and again when key changes or reload is called.

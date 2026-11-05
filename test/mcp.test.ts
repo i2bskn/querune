@@ -269,7 +269,9 @@ describe("GET /authorize", () => {
     expect(consent.html).toContain("client.example");
     expect(consent.html).toContain(member.email);
     expect(consent.html).not.toContain("このパソコン上のアプリ");
-    expect(consent.html).toContain("このQueruneに登録されたサイトの一覧を読み取れるようになります");
+    expect(consent.html).toContain(
+      "このQueruneに登録されたサイトの一覧と、取り込んだ Search Console・GA4 の集計と取り込みの状況を読み取れるようになります。",
+    );
     const res = await send(authorizeUrl(ORIGIN, consent.clientId, (await pkce()).challenge), {
       cookies: memberCookies,
     });

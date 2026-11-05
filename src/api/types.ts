@@ -86,3 +86,63 @@ export type UpdateSiteRequest = {
   gsc_property?: string | null;
   ga4_property_id?: string | null;
 };
+
+// GET /api/v1/google: the service account (GOOGLE_SERVICE_ACCOUNT_KEY) that imports the data.
+export type GoogleStatus = {
+  configured: boolean;
+  // The email to add to the Search Console and GA4 properties. null unless configured.
+  client_email: string | null;
+  // "invalid" when the key is set but cannot be used.
+  error: "invalid" | null;
+};
+
+export type SyncDataset = "gsc_pages" | "gsc_queries" | "ga4_landing_pages";
+
+// POST /api/v1/sites/:id/sync. Both dates are included, up to 90 days.
+export type SyncRequest = {
+  start_date: string;
+  end_date: string;
+};
+
+export type SyncResponse = {
+  // The messages queued: days times datasets.
+  queued: number;
+  // The distinct days queued.
+  days: number;
+};
+
+export type SyncFailure = {
+  date: string;
+  error_code: string | null;
+  error_message: string | null;
+  // UNIX time in milliseconds.
+  finished_at: number | null;
+};
+
+// The import state of one dataset, counted over the days of its current property. A day is available once it has
+// been imported successfully; it stays available while it is imported again.
+export type DatasetSyncStatus = {
+  dataset: SyncDataset;
+  configured: boolean;
+  property: string | null;
+  // The latest available day.
+  latest_date: string | null;
+  // The earliest available day with provisional data.
+  provisional_from: string | null;
+  // UNIX time in milliseconds.
+  last_succeeded_at: number | null;
+  available_days: number;
+  // Available days whose last import stopped at the row limit.
+  truncated_days: number;
+  queued: number;
+  running: number;
+  failed: number;
+  // The failed days, newest first, up to 10.
+  recent_failures: SyncFailure[];
+};
+
+// GET /api/v1/sites/:id/sync. datasets is always gsc_pages, gsc_queries, ga4_landing_pages.
+export type SyncStatus = {
+  site_id: string;
+  datasets: DatasetSyncStatus[];
+};

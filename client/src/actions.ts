@@ -1,4 +1,12 @@
-import type { CreateSiteRequest, CreateUserRequest, Site, UpdateSiteRequest, User } from "../../src/api/types";
+import type {
+  CreateSiteRequest,
+  CreateUserRequest,
+  Site,
+  SyncRequest,
+  SyncResponse,
+  UpdateSiteRequest,
+  User,
+} from "../../src/api/types";
 import { LoginRequiredError, responseErrorMessage, unexpectedResponseMessage } from "./api";
 import type { ApiClient } from "./load";
 import { isValidId } from "./router";
@@ -142,4 +150,21 @@ export type SiteActionResult = ResourceActionResult;
 export async function deleteSite(client: ApiClient, siteId: string): Promise<SiteActionResult> {
   if (!isValidId(siteId)) return INVALID_SITE_ID;
   return resourceActionResult(await send(() => client.api.v1.sites[":id"].$delete({ param: { id: siteId } })));
+}
+
+export type SyncResult = { kind: "ok"; result: SyncResponse } | { kind: "notFound" } | SendFailure;
+
+// Asks for the import of the days from start_date to end_date. Errors, including not_configured and
+// google_not_configured (409) and temporarily_unavailable (503), are shown with the server's message. Never rejects.
+export async function requestSync(client: ApiClient, siteId: string, input: SyncRequest): Promise<SyncResult> {
+  if (!isValidId(siteId)) return INVALID_SITE_ID;
+  const sent = await send(() => client.api.v1.sites[":id"].sync.$post({ param: { id: siteId }, json: input }));
+  if (sent.kind !== "response") return sent;
+  const { res } = sent;
+  if (res.ok) {
+    const body = await okJson(res as { status: number; json(): Promise<SyncResponse> });
+    return body.kind === "ok" ? { kind: "ok", result: body.value } : body;
+  }
+  if (res.status === 404) return { kind: "notFound" };
+  return { kind: "error", message: await responseErrorMessage(res) };
 }

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { check, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const users = sqliteTable(
   "users",
@@ -65,3 +65,129 @@ export const sites = sqliteTable("sites", {
 });
 
 export type SiteRow = typeof sites.$inferSelect;
+
+// The datasets that are imported for each site (src/sync/).
+export const DATASETS = ["gsc_pages", "gsc_queries", "ga4_landing_pages"] as const;
+const DATASET_CHECK = sql.raw("('gsc_pages', 'gsc_queries', 'ga4_landing_pages')");
+
+// The imported rows. site_id refers to sites.id without a foreign key: the rows of a deleted site are removed later
+// through pending_purges. property is the property the row was imported from; reads use only the rows of the
+// current property of the site. date is YYYY-MM-DD. run_id is the import (sync_days.run_id) that last wrote the row.
+
+// Search Console, by page and day. date is in Pacific Time.
+export const gscPageDaily = sqliteTable(
+  "gsc_page_daily",
+  {
+    siteId: text("site_id").notNull(),
+    property: text("property").notNull(),
+    date: text("date").notNull(),
+    // The URL as Search Console returned it.
+    page: text("page").notNull(),
+    clicks: integer("clicks").notNull(),
+    impressions: integer("impressions").notNull(),
+    // The average position as Search Console returned it.
+    position: real("position").notNull(),
+    runId: text("run_id").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.siteId, t.property, t.date, t.page] })],
+);
+
+// Search Console, by page, query and day. date is in Pacific Time.
+export const gscQueryDaily = sqliteTable(
+  "gsc_query_daily",
+  {
+    siteId: text("site_id").notNull(),
+    property: text("property").notNull(),
+    date: text("date").notNull(),
+    page: text("page").notNull(),
+    query: text("query").notNull(),
+    clicks: integer("clicks").notNull(),
+    impressions: integer("impressions").notNull(),
+    position: real("position").notNull(),
+    runId: text("run_id").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.siteId, t.property, t.date, t.page, t.query] })],
+);
+
+// GA4, by landing page, session default channel group and day. property is the GA4 property ID; date is in the
+// time zone of the property.
+export const ga4LandingDaily = sqliteTable(
+  "ga4_landing_daily",
+  {
+    siteId: text("site_id").notNull(),
+    property: text("property").notNull(),
+    date: text("date").notNull(),
+    // landingPage (a path) as GA4 returned it, including "(not set)".
+    landingPage: text("landing_page").notNull(),
+    // sessionDefaultChannelGroup as GA4 returned it.
+    channelGroup: text("channel_group").notNull(),
+    sessions: integer("sessions").notNull(),
+    engagedSessions: integer("engaged_sessions").notNull(),
+    keyEvents: real("key_events").notNull(),
+    runId: text("run_id").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.siteId, t.property, t.date, t.landingPage, t.channelGroup] })],
+);
+
+// The import state of each day of each dataset of a site. The last_* columns describe the last successful import;
+// they and the imported rows stay while the day is imported again or when that fails.
+export const syncDays = sqliteTable(
+  "sync_days",
+  {
+    siteId: text("site_id").notNull(),
+    dataset: text("dataset", { enum: DATASETS }).notNull(),
+    date: text("date").notNull(),
+    // The property of the current import.
+    property: text("property").notNull(),
+    status: text("status", { enum: ["queued", "running", "succeeded", "failed"] }).notNull(),
+    // The ID (ULID) of the current import, carried by every message of it.
+    runId: text("run_id").notNull(),
+    queuedAt: integer("queued_at").notNull(),
+    // When the first page started.
+    startedAt: integer("started_at"),
+    // Updated with every page.
+    heartbeatAt: integer("heartbeat_at"),
+    // When the day became succeeded or failed.
+    finishedAt: integer("finished_at"),
+    // Set when failed (error_message up to 500 characters); NULL otherwise.
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    lastSucceededAt: integer("last_succeeded_at"),
+    lastDataState: text("last_data_state", { enum: ["final", "provisional"] }),
+    lastRowCount: integer("last_row_count"),
+    // 1 when the last successful import stopped at the row limit.
+    lastTruncated: integer("last_truncated"),
+    // America/Los_Angeles for Search Console, the time zone of the property for GA4.
+    lastTimeZone: text("last_time_zone"),
+  },
+  (t) => [
+    primaryKey({ columns: [t.siteId, t.dataset, t.date] }),
+    index("sync_days_site_dataset_status_idx").on(t.siteId, t.dataset, t.status),
+    index("sync_days_status_heartbeat_idx").on(t.status, t.heartbeatAt),
+    check("sync_days_dataset_check", sql`${t.dataset} IN ${DATASET_CHECK}`),
+    check("sync_days_status_check", sql`${t.status} IN ('queued', 'running', 'succeeded', 'failed')`),
+    check(
+      "sync_days_last_data_state_check",
+      sql`${t.lastDataState} IS NULL OR ${t.lastDataState} IN ('final', 'provisional')`,
+    ),
+  ],
+);
+
+// Imported rows waiting to be deleted after a site was deleted or its property changed (src/sync/consumer.ts).
+export const pendingPurges = sqliteTable(
+  "pending_purges",
+  {
+    id: text("id").primaryKey(),
+    siteId: text("site_id").notNull(),
+    dataset: text("dataset", { enum: DATASETS }).notNull(),
+    // NULL: every row of the dataset of the site. Otherwise only the rows of this property.
+    property: text("property"),
+    createdAt: integer("created_at").notNull(),
+    // When the purge message was last sent.
+    attemptedAt: integer("attempted_at"),
+  },
+  (t) => [check("pending_purges_dataset_check", sql`${t.dataset} IN ${DATASET_CHECK}`)],
+);
+
+export type SyncDayRow = typeof syncDays.$inferSelect;
+export type PendingPurgeRow = typeof pendingPurges.$inferSelect;

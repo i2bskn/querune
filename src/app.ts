@@ -11,6 +11,7 @@ import {
 } from "./auth/middleware";
 import auth from "./routes/auth";
 import authorize from "./routes/authorize";
+import googleApi from "./routes/google";
 import me from "./routes/me";
 import sitesApi from "./routes/sites";
 import usersApi from "./routes/users";
@@ -34,7 +35,8 @@ app.route("/authorize", authorize);
 const apiRoutes = app
   .route("/api/v1/me", me)
   .route("/api/v1/users", usersApi)
-  .route("/api/v1/sites", sitesApi);
+  .route("/api/v1/sites", sitesApi)
+  .route("/api/v1/google", googleApi);
 
 // Types for hc<AppType>(). Only /api/v1/* is included.
 export type AppType = typeof apiRoutes;

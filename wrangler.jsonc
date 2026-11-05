@@ -57,5 +57,32 @@
       // provisions the namespace automatically.
       "binding": "OAUTH_KV"
     }
-  ]
+  ],
+  // The imports of Search Console and GA4 (src/sync). `wrangler deploy` creates missing queues only for producer
+  // bindings, and fails with "Queue ... does not exist" for a queue that has only a consumer.
+  "queues": {
+    "producers": [
+      { "binding": "SYNC_QUEUE", "queue": "querune-sync" },
+      // Not used by the code: declared only so that `wrangler deploy` creates the dead letter queue as well.
+      { "binding": "SYNC_DLQ", "queue": "querune-sync-dlq" }
+    ],
+    "consumers": [
+      {
+        "queue": "querune-sync",
+        // One message per invocation, one invocation at a time: a message parses and writes up to 2,000 rows, within
+        // the CPU time of the Free plan, and the imports do not compete for the D1 database.
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_concurrency": 1,
+        // Failures that may succeed later retry with an explicit delay; after max_retries the message goes to the
+        // dead letter queue, whose consumer records the day as failed.
+        "max_retries": 5,
+        "dead_letter_queue": "querune-sync-dlq"
+      },
+      // Records the dead-lettered imports as failed.
+      { "queue": "querune-sync-dlq", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 10 }
+    ]
+  },
+  // The daily import (src/sync/enqueue.ts), at 18:00 UTC.
+  "triggers": { "crons": ["0 18 * * *"] }
 }

@@ -1,9 +1,22 @@
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Site } from "../src/api/types";
+import type { Site, SyncStatus } from "../src/api/types";
 import type { UserRow } from "../src/db/schema";
 import { newSiteId } from "../src/ids";
-import { countTable, createSite, createUser, login, resetDb, send, type SessionCookies } from "./helpers";
+import { addDays, subtractMonths, todayUtc } from "../src/sync/dates";
+import {
+  countTable,
+  createSite,
+  createUser,
+  dbChangingBefore,
+  fakeQueue,
+  login,
+  resetDb,
+  send,
+  type FakeQueue,
+  type SessionCookies,
+} from "./helpers";
+import { sharedServiceAccount } from "./google";
 
 let admin: UserRow;
 let member: UserRow;
@@ -382,5 +395,373 @@ describe("DELETE /api/v1/sites/:id", () => {
         "サイトが見つかりません",
       );
     }
+  });
+});
+
+const GSC = "sc-domain:example.com";
+const GA4 = "123456789";
+
+async function insertDay(siteId: string, row: Record<string, unknown>): Promise<void> {
+  const values = {
+    dataset: "gsc_pages",
+    property: GSC,
+    status: "succeeded",
+    run_id: "r",
+    queued_at: 1,
+    ...row,
+    site_id: siteId,
+  };
+  const columns = Object.keys(values);
+  await env.DB.prepare(`INSERT INTO sync_days (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`)
+    .bind(...Object.values(values))
+    .run();
+}
+
+describe("POST /api/v1/sites/:id/sync", () => {
+  let queue: FakeQueue;
+  let key: string;
+  const today = () => todayUtc(Date.now());
+
+  beforeEach(async () => {
+    queue = fakeQueue();
+    key = (await sharedServiceAccount()).key;
+  });
+
+  function syncRequest(id: string, json: unknown, env: Record<string, unknown> = {}) {
+    return send(`/api/v1/sites/${id}/sync`, {
+      cookies: memberCookies,
+      json,
+      env: { SYNC_QUEUE: queue, GOOGLE_SERVICE_ACCOUNT_KEY: key, ...env },
+    });
+  }
+
+  it("returns 401 without a session", async () => {
+    const site = await createSite({ gscProperty: GSC });
+    const res = await send(`/api/v1/sites/${site.id}/sync`, { json: { start_date: today(), end_date: today() } });
+    await expectError(res, 401, "unauthorized");
+  });
+
+  it("queues every day of every dataset with a property", async () => {
+    const site = await createSite({ gscProperty: GSC, ga4PropertyId: GA4 });
+    const end = addDays(today(), -1);
+    const start = addDays(end, -2);
+    const res = await syncRequest(site.id, { start_date: start, end_date: end });
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ queued: 9, days: 3 });
+    expect(queue.messages).toHaveLength(9);
+    expect(queue.messages).toContainEqual(
+      expect.objectContaining({ kind: "sync", siteId: site.id, dataset: "ga4_landing_pages", date: start, property: GA4, offset: 0 }),
+    );
+    expect(await countTable("sync_days")).toBe(9);
+  });
+
+  it("queues the GA4 property alone, and today", async () => {
+    const site = await createSite({ ga4PropertyId: GA4 });
+    const res = await syncRequest(site.id, { start_date: today(), end_date: today() });
+    expect(await res.json()).toEqual({ queued: 1, days: 1 });
+  });
+
+  it("asks for succeeded days again (force)", async () => {
+    const site = await createSite({ gscProperty: GSC });
+    const date = addDays(today(), -20);
+    await insertDay(site.id, { date, last_succeeded_at: 1, last_data_state: "final" });
+    await insertDay(site.id, { date, dataset: "gsc_queries", status: "queued", queued_at: Date.now() });
+    const res = await syncRequest(site.id, { start_date: date, end_date: date });
+    expect(await res.json()).toEqual({ queued: 1, days: 1 });
+  });
+
+  it("leaves out the Search Console days older than 16 months", async () => {
+    const site = await createSite({ gscProperty: GSC, ga4PropertyId: GA4 });
+    const cutoff = subtractMonths(today(), 16);
+    const res = await syncRequest(site.id, { start_date: addDays(cutoff, -5), end_date: addDays(cutoff, 4) });
+    expect(await res.json()).toEqual({ queued: 20, days: 10 });
+    const gscDates = queue.messages.filter((m) => m.kind === "sync" && m.dataset === "gsc_pages").map((m) => (m.kind === "sync" ? m.date : ""));
+    expect(gscDates.sort()).toEqual([0, 1, 2, 3, 4].map((n) => addDays(cutoff, n)));
+  });
+
+  it("validates in order", async () => {
+    const site = await createSite({ gscProperty: GSC });
+    const invalidDate = "日付は YYYY-MM-DD の形式で入力してください";
+    await expectError(await syncRequest(site.id, { start_date: "x", days: 1 }), 400, "unknown_field", "未知の項目があります: days");
+    for (const body of [
+      {},
+      { start_date: today() },
+      { start_date: 20261001, end_date: today() },
+      { start_date: "2026-1-01", end_date: today() },
+      { start_date: "2026-02-30", end_date: today() },
+      { start_date: today(), end_date: "2026-13-01" },
+    ]) {
+      await expectError(await syncRequest(site.id, body), 400, "invalid_date", invalidDate);
+    }
+    await expectError(
+      await syncRequest(site.id, { start_date: today(), end_date: addDays(today(), -1) }),
+      400,
+      "invalid_range",
+      "開始日は終了日以前にしてください",
+    );
+    await expectError(
+      await syncRequest(site.id, { start_date: today(), end_date: addDays(today(), 1) }),
+      400,
+      "invalid_range",
+      "終了日は今日以前にしてください",
+    );
+    await expectError(
+      await syncRequest(site.id, { start_date: addDays(today(), -90), end_date: today() }),
+      400,
+      "invalid_range",
+      "一度に取り込める期間は 90 日までです",
+    );
+    const ok = { start_date: addDays(today(), -89), end_date: today() };
+    await expectError(await syncRequest(MISSING_ID, ok), 404, "not_found", "サイトが見つかりません");
+    await expectError(await syncRequest("site_bad", ok), 404, "not_found");
+    const bare = await createSite();
+    await expectError(
+      await syncRequest(bare.id, ok),
+      409,
+      "not_configured",
+      "Search Console か GA4 のプロパティを設定してください",
+    );
+    await expectError(
+      await syncRequest(site.id, ok, { GOOGLE_SERVICE_ACCOUNT_KEY: undefined }),
+      409,
+      "google_not_configured",
+      "サービスアカウントの鍵が設定されていません",
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expectError(
+      await syncRequest(site.id, ok, { GOOGLE_SERVICE_ACCOUNT_KEY: "{" }),
+      409,
+      "google_not_configured",
+      "サービスアカウントの鍵を確認してください",
+    );
+    expect(queue.messages).toEqual([]);
+    const accepted = await syncRequest(site.id, ok);
+    expect(await accepted.json()).toEqual({ queued: 180, days: 90 });
+  });
+
+  it("returns 503 temporarily_unavailable when the queue fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const site = await createSite({ gscProperty: GSC });
+    queue.fail = true;
+    await expectError(
+      await syncRequest(site.id, { start_date: today(), end_date: today() }),
+      503,
+      "temporarily_unavailable",
+      "取り込みを依頼できませんでした。時間をおいてやり直してください",
+    );
+    const { results } = await env.DB.prepare("SELECT status, error_code FROM sync_days").all();
+    expect(results).toEqual([
+      { status: "failed", error_code: "enqueue_failed" },
+      { status: "failed", error_code: "enqueue_failed" },
+    ]);
+  });
+});
+
+describe("GET /api/v1/sites/:id/sync", () => {
+  it("returns 404 not_found for a missing site", async () => {
+    for (const id of [MISSING_ID, "site_bad"]) {
+      await expectError(await send(`/api/v1/sites/${id}/sync`, { cookies: memberCookies }), 404, "not_found");
+    }
+  });
+
+  it("counts the days of the current property of each dataset", async () => {
+    const site = await createSite({ gscProperty: GSC });
+    await insertDay(site.id, { date: "2026-10-01", last_succeeded_at: 100, last_data_state: "final", last_truncated: 1 });
+    await insertDay(site.id, { date: "2026-10-02", status: "queued", last_succeeded_at: 300, last_data_state: "provisional", last_truncated: 0 });
+    await insertDay(site.id, { date: "2026-10-03", status: "running", last_succeeded_at: 200, last_data_state: "provisional", last_truncated: 0 });
+    await insertDay(site.id, { date: "2026-10-04", status: "failed", error_code: "permission_denied", error_message: "denied", finished_at: 500 });
+    await insertDay(site.id, { date: "2026-10-05", status: "failed", error_code: "invalid_request", error_message: "bad", finished_at: 600, last_succeeded_at: 50, last_data_state: "final", last_truncated: 0 });
+    // Another property, another dataset, another site.
+    await insertDay(site.id, { date: "2026-10-09", property: "sc-domain:old.example.com", last_succeeded_at: 900, last_data_state: "final" });
+    await insertDay(site.id, { date: "2026-10-01", dataset: "gsc_queries", status: "failed", finished_at: 1 });
+    await insertDay(site.id, { date: "2026-10-01", dataset: "ga4_landing_pages", property: GA4, last_succeeded_at: 1 });
+    const other = await createSite({ gscProperty: GSC });
+    await insertDay(other.id, { date: "2026-10-20", last_succeeded_at: 999, last_data_state: "final" });
+
+    const res = await send(`/api/v1/sites/${site.id}/sync`, { cookies: memberCookies });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as SyncStatus;
+    expect(body).toEqual({
+      site_id: site.id,
+      datasets: [
+        {
+          dataset: "gsc_pages",
+          configured: true,
+          property: GSC,
+          latest_date: "2026-10-05",
+          provisional_from: "2026-10-02",
+          last_succeeded_at: 300,
+          available_days: 4,
+          truncated_days: 1,
+          queued: 1,
+          running: 1,
+          failed: 2,
+          recent_failures: [
+            { date: "2026-10-05", error_code: "invalid_request", error_message: "bad", finished_at: 600 },
+            { date: "2026-10-04", error_code: "permission_denied", error_message: "denied", finished_at: 500 },
+          ],
+        },
+        {
+          dataset: "gsc_queries",
+          configured: true,
+          property: GSC,
+          latest_date: null,
+          provisional_from: null,
+          last_succeeded_at: null,
+          available_days: 0,
+          truncated_days: 0,
+          queued: 0,
+          running: 0,
+          failed: 1,
+          recent_failures: [{ date: "2026-10-01", error_code: null, error_message: null, finished_at: 1 }],
+        },
+        {
+          dataset: "ga4_landing_pages",
+          configured: false,
+          property: null,
+          latest_date: null,
+          provisional_from: null,
+          last_succeeded_at: null,
+          available_days: 0,
+          truncated_days: 0,
+          queued: 0,
+          running: 0,
+          failed: 0,
+          recent_failures: [],
+        },
+      ],
+    });
+  });
+
+  it("returns at most 10 recent failures, newest first", async () => {
+    const site = await createSite({ gscProperty: GSC });
+    for (let i = 1; i <= 12; i++) {
+      await insertDay(site.id, { date: addDays("2026-10-01", i), status: "failed", error_code: "x", finished_at: i });
+    }
+    const body = (await (await send(`/api/v1/sites/${site.id}/sync`, { cookies: memberCookies })).json()) as SyncStatus;
+    expect(body.datasets[0]?.failed).toBe(12);
+    expect(body.datasets[0]?.recent_failures.map((f) => f.finished_at)).toEqual([12, 11, 10, 9, 8, 7, 6, 5, 4, 3]);
+  });
+});
+
+describe("imported data on property changes and deletion", () => {
+  let queue: FakeQueue;
+
+  beforeEach(() => {
+    queue = fakeQueue();
+  });
+
+  async function seed(siteId: string): Promise<void> {
+    for (const dataset of ["gsc_pages", "gsc_queries"]) await insertDay(siteId, { date: "2026-10-01", dataset });
+    await insertDay(siteId, { date: "2026-10-01", dataset: "ga4_landing_pages", property: GA4 });
+  }
+
+  async function datasetsLeft(): Promise<string[]> {
+    const { results } = await env.DB.prepare("SELECT dataset FROM sync_days ORDER BY dataset").all<{ dataset: string }>();
+    return results.map((row) => row.dataset);
+  }
+
+  async function purges() {
+    const { results } = await env.DB.prepare(
+      "SELECT id, site_id, dataset, property FROM pending_purges ORDER BY dataset",
+    ).all<{ id: string; site_id: string; dataset: string; property: string | null }>();
+    return results;
+  }
+
+  function patch(id: string, json: unknown) {
+    return send(`/api/v1/sites/${id}`, { method: "PATCH", cookies: memberCookies, json, env: { SYNC_QUEUE: queue } });
+  }
+
+  it("forgets the Search Console days and purges their rows when the property changes", async () => {
+    const site = await createSite({ gscProperty: GSC, ga4PropertyId: GA4 });
+    await seed(site.id);
+    const res = await patch(site.id, { gsc_property: "sc-domain:new.example.com" });
+    expect(res.status).toBe(200);
+    expect(await datasetsLeft()).toEqual(["ga4_landing_pages"]);
+    const rows = await purges();
+    expect(rows.map(({ site_id, dataset, property }) => ({ site_id, dataset, property }))).toEqual([
+      { site_id: site.id, dataset: "gsc_pages", property: GSC },
+      { site_id: site.id, dataset: "gsc_queries", property: GSC },
+    ]);
+    expect(queue.messages.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))).toEqual(
+      rows.map((row) => ({ kind: "purge", purgeId: row.id })).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+    );
+  });
+
+  it("forgets the GA4 days when the GA4 property is cleared", async () => {
+    const site = await createSite({ gscProperty: GSC, ga4PropertyId: GA4 });
+    await seed(site.id);
+    expect((await patch(site.id, { ga4_property_id: "" })).status).toBe(200);
+    expect(await datasetsLeft()).toEqual(["gsc_pages", "gsc_queries"]);
+    expect((await purges()).map((row) => [row.dataset, row.property])).toEqual([["ga4_landing_pages", GA4]]);
+    expect(queue.messages).toHaveLength(1);
+  });
+
+  it("creates no purge when a property is set for the first time", async () => {
+    const site = await createSite({ ga4PropertyId: GA4 });
+    await seed(site.id);
+    expect((await patch(site.id, { gsc_property: GSC })).status).toBe(200);
+    expect(await datasetsLeft()).toEqual(["ga4_landing_pages"]);
+    expect(await purges()).toEqual([]);
+    expect(queue.messages).toEqual([]);
+  });
+
+  it("keeps everything when the properties do not change", async () => {
+    const site = await createSite({ gscProperty: GSC, ga4PropertyId: GA4 });
+    await seed(site.id);
+    expect((await patch(site.id, { name: "Renamed", gsc_property: " SC-DOMAIN:Example.com ", ga4_property_id: GA4 })).status).toBe(200);
+    expect(await datasetsLeft()).toEqual(["ga4_landing_pages", "gsc_pages", "gsc_queries"]);
+    expect(await purges()).toEqual([]);
+  });
+
+  it("logs a failed purge message and still answers 200", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const site = await createSite({ gscProperty: GSC });
+    queue.fail = true;
+    expect((await patch(site.id, { gsc_property: null })).status).toBe(200);
+    expect(await purges()).toHaveLength(2);
+    expect(error).toHaveBeenCalledWith("sending purges failed", expect.anything());
+  });
+
+  it("forgets every day and purges every dataset when the site is deleted", async () => {
+    const site = await createSite({ gscProperty: GSC, ga4PropertyId: GA4 });
+    const other = await createSite({ gscProperty: GSC });
+    await seed(site.id);
+    await insertDay(other.id, { date: "2026-10-01" });
+    const res = await send(`/api/v1/sites/${site.id}`, { method: "DELETE", cookies: memberCookies, env: { SYNC_QUEUE: queue } });
+    expect(res.status).toBe(204);
+    expect(await datasetsLeft()).toEqual(["gsc_pages"]);
+    const rows = await purges();
+    expect(rows.map(({ site_id, dataset, property }) => ({ site_id, dataset, property }))).toEqual([
+      { site_id: site.id, dataset: "ga4_landing_pages", property: null },
+      { site_id: site.id, dataset: "gsc_pages", property: null },
+      { site_id: site.id, dataset: "gsc_queries", property: null },
+    ]);
+    expect(queue.messages).toHaveLength(3);
+  });
+
+  it("creates no purge when deleting a missing site", async () => {
+    await expectError(
+      await send(`/api/v1/sites/${MISSING_ID}`, { method: "DELETE", cookies: memberCookies, env: { SYNC_QUEUE: queue } }),
+      404,
+      "not_found",
+    );
+    expect(await purges()).toEqual([]);
+    expect(queue.messages).toEqual([]);
+  });
+
+  it("creates no purge when the site is deleted concurrently", async () => {
+    const site = await createSite({ gscProperty: GSC });
+    const db = dbChangingBefore(/INSERT INTO pending_purges/, async () => {
+      await env.DB.prepare("DELETE FROM sites WHERE id = ?").bind(site.id).run();
+    });
+    const res = await send(`/api/v1/sites/${site.id}`, {
+      method: "DELETE",
+      cookies: memberCookies,
+      env: { SYNC_QUEUE: queue, DB: db.$client },
+    });
+    await expectError(res, 404, "not_found");
+    expect(await purges()).toEqual([]);
+    expect(queue.messages).toEqual([]);
   });
 });

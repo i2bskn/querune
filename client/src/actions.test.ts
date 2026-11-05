@@ -7,6 +7,7 @@ import {
   deleteSite,
   deleteUser,
   resetUserPassword,
+  requestSync,
   revokeUserSessions,
   updateSite,
 } from "./actions";
@@ -275,6 +276,56 @@ describe("deleteSite", () => {
   it("is an error without sending for an invalid ID", async () => {
     const { client, fetch } = setup(() => new Response(null, { status: 204 }), 401, url);
     expect(await deleteSite(client, "../users/u1")).toEqual({ kind: "error", message: "サイトが見つかりません" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("requestSync", () => {
+  const url = `/api/v1/sites/${SITE_ID}/sync`;
+  const input = { start_date: "2026-10-01", end_date: "2026-10-28" };
+
+  it("sends the period and is ok with the counts on 202", async () => {
+    const { client, fetch } = setup(() => Response.json({ queued: 84, days: 28 }, { status: 202 }), 401, url);
+    expect(await requestSync(client, SITE_ID, input)).toEqual({ kind: "ok", result: { queued: 84, days: 28 } });
+    const init = fetch.mock.calls[0]?.[1];
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual(input);
+  });
+
+  it("is an error with the server's message on 400, 409 and 503", async () => {
+    for (const [status, message] of [
+      [400, "一度に取り込める期間は 90 日までです"],
+      [409, "サービスアカウントの鍵が設定されていません"],
+      [503, "取り込みを依頼できませんでした。時間をおいてやり直してください"],
+    ] as const) {
+      const { client } = setup(apiError(status, message), 401, url);
+      expect(await requestSync(client, SITE_ID, input)).toEqual({ kind: "error", message });
+    }
+  });
+
+  it("is not found on 404, unknown when fetch rejects and redirecting when login is required", async () => {
+    expect(await requestSync(setup(apiError(404, "サイトが見つかりません"), 401, url).client, SITE_ID, input)).toEqual({
+      kind: "notFound",
+    });
+    expect(
+      await requestSync(setup(() => Promise.reject(new TypeError("Failed to fetch")), 401, url).client, SITE_ID, input),
+    ).toEqual({ kind: "unknown" });
+    expect(await requestSync(setup(apiError(401, "ログインしてください"), 401, url).client, SITE_ID, input)).toEqual({
+      kind: "redirecting",
+    });
+  });
+
+  it("is an error when the response is not JSON", async () => {
+    const { client } = setup(() => new Response("ok", { status: 202 }), 401, url);
+    expect(await requestSync(client, SITE_ID, input)).toEqual({
+      kind: "error",
+      message: "サーバーから予期しない応答がありました（HTTP 202）",
+    });
+  });
+
+  it("is an error without sending for an invalid ID", async () => {
+    const { client, fetch } = setup(() => new Response(null, { status: 202 }), 401, url);
+    expect(await requestSync(client, "../users/u1", input)).toEqual({ kind: "error", message: "サイトが見つかりません" });
     expect(fetch).not.toHaveBeenCalled();
   });
 });

@@ -17,6 +17,9 @@ export default defineConfig(async () => {
                   AUTH_MODE: "password",
                   JWT_SECRET: "test-secret-test-secret-test-secret-0123",
                 },
+                // The producer sends to a queue that has no consumer, so that the consumer of wrangler.jsonc never
+                // runs in the background during tests. Consumer tests call the queue handler directly.
+                queueProducers: { SYNC_QUEUE: { queueName: "querune-sync-test" } },
               },
             }),
           ],

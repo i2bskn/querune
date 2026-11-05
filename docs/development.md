@@ -4,9 +4,19 @@ Queruneを開発する場合の、技術スタック・ローカル開発・デ�
 
 ## 技術スタック
 
-Cloudflare Workers + Hono + D1（drizzle-orm）で動き、MCPのOAuthの状態はKVに置きます。言語はTypeScript、パッケージ管理はpnpm、テストは`@cloudflare/vitest-plugin`、Web画面はReact + Viteです。
+Cloudflare Workers + Hono + D1（drizzle-orm）で動き、MCPのOAuthの状態はKVに置きます。Search ConsoleとGA4の取り込みと、取り込んだデータの削除はQueues（`querune-sync`、DLQは`querune-sync-dlq`）で少しずつ処理し、毎日の取り込みはCron Triggers（18:00 UTC）で始めます。言語はTypeScript、パッケージ管理はpnpm、テストは`@cloudflare/vitest-plugin`、Web画面はReact + Viteです。
 
 ログイン、ユーザー管理、MCPのOAuth認可サーバー（`@cloudflare/workers-oauth-provider`、`@modelcontextprotocol/sdk`）は[Pinglune](https://github.com/i2bskn/pinglune)から移植した土台です。
+
+## Freeプランの目安
+
+Freeプランの上限の中で動くように作っていますが、行数の多いサイトや多数のサイトでは上限に当たります。その場合はWorkers Paidプランを使ってください。
+
+- Queuesは1日約10,000オペレーション（1メッセージ約3オペレーション、約3,300メッセージ）です。1メッセージは1データセット×1日×2,000行までを処理します。
+- 毎日の取り込みは、サイトあたり最大でおよそ（3データセット×7日＋直近30日の取り直しの日）メッセージです。1日2,000行を超える日は、ページ数だけメッセージが増えます。
+- 1回の手動の取り込みは最大90日で、3データセットなら270メッセージ以上（1日2,000行を超える日はさらに増える）です。
+- WorkersのFreeプランは1回の実行のCPU時間が10msで、行数の多い日や多数のサイトでは処理が打ち切られることがあります。
+- D1のFreeプランは1日あたり書き込み10万行・読み取り500万行、1データベース500MBです。取り込む行数はおおむね書き込み行数になります。MCPのクエリ別の集計は1回でおおよそ（日数×1日の行数、比較するならその2倍）行を読みます。
 
 ## ローカルで開発する
 
@@ -44,4 +54,6 @@ Deploy to CloudflareボタンもWorkers Buildsも、デプロイには`pnpm run 
 
 手元から`pnpm run deploy`を実行する場合、Cloudflareのアカウントが複数あると、wranglerがアカウントを選べずに失敗します。`CLOUDFLARE_ACCOUNT_ID`にデプロイ先のアカウントIDを指定してください。
 
-Deploy to Cloudflareボタンは、`.dev.vars.example`でコメントアウトしていないキーをシークレットとして入力させます。`JWT_SECRET`以外はコメントアウトしておきます。
+Deploy to Cloudflareボタンは、`.dev.vars.example`でコメントアウトしていないキーをシークレットとして入力させます。`JWT_SECRET`以外はコメントアウトしておきます（`GOOGLE_SERVICE_ACCOUNT_KEY`は任意なので、デプロイ後に設定します）。
+
+キューは、`wrangler.jsonc`にproducerのバインディングがあれば`wrangler deploy`が作ります。consumerだけのキューは作られないため、DLQにもコードでは使わないproducerのバインディング（`SYNC_DLQ`）を置いています。
