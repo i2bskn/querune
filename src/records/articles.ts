@@ -1,7 +1,6 @@
 import { eq } from "drizzle-orm";
 import type { Article, ArticleSummary } from "../api/types";
-import { isUniqueViolation } from "../auth/users";
-import type { Db } from "../db/client";
+import { isUniqueViolation, type Db } from "@i2bskn/workers-app-core";
 import { articles, type ArticleRow } from "../db/schema";
 import { ARTICLE_ID_PATTERN, newArticleId, SITE_ID_PATTERN } from "../ids";
 import {

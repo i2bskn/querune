@@ -1,7 +1,7 @@
 // Asks for imports: records the days in sync_days and sends one message per day and dataset to the sync queue
 // (src/sync/consumer.ts). Also the daily cron, which imports the recent days again.
 
-import { describeError } from "../auth/middleware";
+import { describeError } from "@i2bskn/workers-app-core";
 import { DATASETS } from "../db/schema";
 import { parseServiceAccountKey } from "../google/credentials";
 import { newUlid } from "../ids";

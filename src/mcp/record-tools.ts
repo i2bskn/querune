@@ -16,7 +16,7 @@ import {
   MAX_RECORDS_PER_SITE,
   type Invalid,
 } from "../records/validate";
-import { clock } from "../clock";
+import { clock } from "@i2bskn/workers-app-core";
 import { ok, readOnlyAnnotations, safely, toolError } from "./results";
 import type { ToolDeps } from "./tools";
 

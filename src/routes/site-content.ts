@@ -10,8 +10,7 @@ import type {
   RecordList,
   RecordListQuery,
 } from "../api/types";
-import { apiError } from "../auth/middleware";
-import { clock } from "../clock";
+import { apiError, clock, jsonBody } from "@i2bskn/workers-app-core";
 import type { AppEnv } from "../env";
 import { createArticle, listArticles } from "../records/articles";
 import { siteNotFound, type Failure } from "../records/common";
@@ -28,7 +27,6 @@ import {
   type RecordFilters,
   type RecordInput,
 } from "../records/validate";
-import { jsonBody } from "./api";
 
 const factory = createFactory<AppEnv>();
 

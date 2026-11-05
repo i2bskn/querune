@@ -1,23 +1,13 @@
 import { Hono } from "hono";
+import { apiError, describeError, isJsonPath } from "@i2bskn/workers-app-core";
+import { core } from "./core";
 import type { AppEnv } from "./env";
-import {
-  apiError,
-  describeError,
-  isJsonPath,
-  loadConfigMiddleware,
-  sameOrigin,
-  securityHeaders,
-  unifyHost,
-} from "./auth/middleware";
-import auth from "./routes/auth";
 import articlesApi from "./routes/articles";
-import authorize from "./routes/authorize";
 import googleApi from "./routes/google";
-import me from "./routes/me";
 import recordsApi from "./routes/records";
 import sitesApi from "./routes/sites";
-import usersApi from "./routes/users";
-import { ErrorPage } from "./views/error";
+
+const { loadConfigMiddleware, sameOrigin, securityHeaders, unifyHost } = core.middleware;
 
 const app = new Hono<AppEnv>();
 
@@ -32,11 +22,11 @@ app.use("/authorize", sameOrigin);
 // "/" and other paths not listed in run_worker_first in wrangler.jsonc are served by the static
 // assets (the SPA) and never reach the Worker. When adding a top-level path here, add it to
 // run_worker_first as well.
-app.route("/auth", auth);
-app.route("/authorize", authorize);
+app.route("/auth", core.routes.auth);
+app.route("/authorize", core.routes.authorize);
 const apiRoutes = app
-  .route("/api/v1/me", me)
-  .route("/api/v1/users", usersApi)
+  .route("/api/v1/me", core.routes.me)
+  .route("/api/v1/users", core.routes.users)
   .route("/api/v1/sites", sitesApi)
   .route("/api/v1/google", googleApi)
   .route("/api/v1/articles", articlesApi)
@@ -47,13 +37,13 @@ export type AppType = typeof apiRoutes;
 
 app.notFound((c) => {
   if (isJsonPath(c.req.path)) return apiError(c, 404, "not_found", "見つかりません");
-  return c.html(ErrorPage({ message: "ページが見つかりません" }), 404);
+  return c.html(core.ErrorPage({ message: "ページが見つかりません" }), 404);
 });
 
 app.onError((error, c) => {
   console.error("unhandled error", describeError(error));
   if (isJsonPath(c.req.path)) return apiError(c, 500, "internal_error", "サーバーでエラーが発生しました");
-  return c.html(ErrorPage({ message: "サーバーでエラーが発生しました" }), 500);
+  return c.html(core.ErrorPage({ message: "サーバーでエラーが発生しました" }), 500);
 });
 
 export default app;

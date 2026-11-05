@@ -3,7 +3,7 @@ import { createExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UserRow } from "../src/db/schema";
-import { mcpHandler } from "../src/mcp/handler";
+import { core } from "../src/core";
 import { createSite, createUser, ORIGIN, resetDb } from "./helpers";
 import type { SiteRow } from "../src/db/schema";
 
@@ -40,7 +40,7 @@ async function rpc(user: UserRow, method: string, params: unknown, sharedEnv: Cl
     headers: { Accept: MCP_ACCEPT, "Content-Type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
   });
-  const res = await mcpHandler.fetch(request, sharedEnv, ctx);
+  const res = await core.mcpHandler.fetch(request, sharedEnv, ctx);
   expect(res.status).toBe(200);
   const body = (await res.json()) as { result?: unknown; error?: unknown };
   expect(body.error).toBeUndefined();

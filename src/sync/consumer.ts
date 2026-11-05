@@ -6,8 +6,7 @@
 // writes nothing. Rows are upserted, and the last page deletes the rows that the import did not write. A purge
 // message deletes the rows left by a deleted site or an old property, 5,000 rows at a time.
 
-import { describeError } from "../auth/middleware";
-import { clock } from "../clock";
+import { clock, describeError } from "@i2bskn/workers-app-core";
 import { DATASETS } from "../db/schema";
 import { loadConfig, type Bindings } from "../env";
 import { PAGE_ROWS, truncateMessage, type GoogleFailure } from "../google/api";

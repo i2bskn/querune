@@ -1,5 +1,5 @@
 import type { RecordSummary, SiteRecord, TagList } from "../api/types";
-import type { Db } from "../db/client";
+import type { Db } from "@i2bskn/workers-app-core";
 import { newRecordId, RECORD_ID_PATTERN, SITE_ID_PATTERN } from "../ids";
 import {
   add,

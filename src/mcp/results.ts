@@ -1,5 +1,5 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { describeError } from "../auth/middleware";
+import { describeError } from "@i2bskn/workers-app-core";
 
 // The results and errors shared by the MCP tools.
 

@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import type { Db } from "../db/client";
+import type { Db } from "@i2bskn/workers-app-core";
 import { sites, type SiteRow, type UserRow } from "../db/schema";
 import { SITE_ID_PATTERN } from "../ids";
 import { listSites } from "../routes/sites";
@@ -180,7 +180,7 @@ function isError(value: unknown): value is CallToolResult {
   return typeof value === "object" && value !== null && "isError" in value;
 }
 
-// Keep the consent page (src/views/consent.tsx) in line with these tools and those of record-tools.ts.
+// Keep the consent text (src/core.ts) in line with these tools and those of record-tools.ts.
 export function registerTools(server: McpServer, deps: ToolDeps): void {
   const { db } = deps;
 

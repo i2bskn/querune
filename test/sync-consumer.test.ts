@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clock } from "../src/clock";
+import { clock } from "@i2bskn/workers-app-core";
 import type { SiteRow } from "../src/db/schema";
 import { PAGE_ROWS } from "../src/google/api";
 import { clearGoogleTokenCache } from "../src/google/credentials";

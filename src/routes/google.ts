@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { GoogleStatus } from "../api/types";
-import { requireUser } from "../auth/middleware";
+import { requireUser } from "../core";
 import type { AppEnv } from "../env";
 import { parseServiceAccountKey } from "../google/credentials";
 

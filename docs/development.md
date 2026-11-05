@@ -6,7 +6,7 @@ Queruneを開発する場合の、技術スタック・ローカル開発・デ�
 
 Cloudflare Workers + Hono + D1（drizzle-orm）で動き、MCPのOAuthの状態はKVに置きます。Search ConsoleとGA4の取り込みと、取り込んだデータの削除はQueues（`querune-sync`、DLQは`querune-sync-dlq`）で少しずつ処理し、毎日の取り込みはCron Triggers（18:00 UTC）で始めます。言語はTypeScript、パッケージ管理はpnpm、テストは`@cloudflare/vitest-plugin`、Web画面はReact + Viteです。
 
-ログイン、ユーザー管理、MCPのOAuth認可サーバー（`@cloudflare/workers-oauth-provider`、`@modelcontextprotocol/sdk`）は[Pinglune](https://github.com/i2bskn/pinglune)から移植した土台です。
+ログイン、ユーザー管理、MCPのOAuth認可サーバー（`@cloudflare/workers-oauth-provider`、`@modelcontextprotocol/sdk`）は[`@i2bskn/workers-app-core`](https://github.com/i2bskn/workers-app-core)を使っています（`src/core.ts`）。
 
 ## Freeプランの目安
 

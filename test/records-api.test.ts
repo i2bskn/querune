@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Article, ArticleSummary, RecordList, SiteRecord, TagList } from "../src/api/types";
-import { createDb } from "../src/db/client";
+import { createDb } from "@i2bskn/workers-app-core";
 import { newArticleId, newRecordId, newSiteId } from "../src/ids";
 import { createRecord, listRecords } from "../src/records/records";
 import {

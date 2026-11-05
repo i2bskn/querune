@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { UpdateRecordRequest } from "../api/types";
-import { apiError, requireUser } from "../auth/middleware";
-import { clock } from "../clock";
+import { apiError, clock } from "@i2bskn/workers-app-core";
+import { requireUser } from "../core";
 import type { AppEnv } from "../env";
 import { recordNotFound } from "../records/common";
 import { deleteRecord, findRecord, updateRecord } from "../records/records";
