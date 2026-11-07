@@ -1,4 +1,4 @@
-import type { MouseEvent, ReactNode } from "react";
+import type { CSSProperties, MouseEvent, ReactNode } from "react";
 import { navigate, shouldHandleClick } from "./router";
 
 // A link to a path inside the SPA, moved to without reloading the page.
@@ -6,12 +6,14 @@ export function Link({
   to,
   className,
   title,
+  style,
   "aria-current": ariaCurrent,
   children,
 }: {
   to: string;
   className?: string;
   title?: string;
+  style?: CSSProperties;
   "aria-current"?: "page" | "location";
   children: ReactNode;
 }) {
@@ -22,7 +24,7 @@ export function Link({
   }
 
   return (
-    <a href={to} className={className} title={title} aria-current={ariaCurrent} onClick={onClick}>
+    <a href={to} className={className} title={title} style={style} aria-current={ariaCurrent} onClick={onClick}>
       {children}
     </a>
   );

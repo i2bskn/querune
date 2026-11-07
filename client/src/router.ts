@@ -7,6 +7,8 @@ export type Route =
   | { name: "siteDetail"; id: string }
   | { name: "siteArticles"; id: string }
   | { name: "siteMemos"; id: string }
+  | { name: "siteData"; id: string }
+  | { name: "siteSettings"; id: string }
   | { name: "articleDetail"; id: string }
   | { name: "memoDetail"; id: string }
   | { name: "notFound" };
@@ -29,9 +31,10 @@ export function matchRoute(path: string): Route {
   if (pathname === "/sites") return { name: "sites" };
   const site = /^\/sites\/([^/]+)$/.exec(pathname);
   if (site?.[1] !== undefined && isValidId(site[1])) return { name: "siteDetail", id: site[1] };
-  const siteContent = /^\/sites\/([^/]+)\/(articles|memos)$/.exec(pathname);
+  const siteContent = /^\/sites\/([^/]+)\/(articles|memos|data|settings)$/.exec(pathname);
   if (siteContent?.[1] !== undefined && isValidId(siteContent[1])) {
-    return { name: siteContent[2] === "articles" ? "siteArticles" : "siteMemos", id: siteContent[1] };
+    const names = { articles: "siteArticles", memos: "siteMemos", data: "siteData", settings: "siteSettings" } as const;
+    return { name: names[siteContent[2] as keyof typeof names], id: siteContent[1] };
   }
   const item = /^\/(articles|memos)\/([^/]+)$/.exec(pathname);
   if (item?.[2] !== undefined && isValidId(item[2])) {
@@ -70,13 +73,14 @@ export function usePath(): string {
 // Moves to a path inside the SPA. The scroll position is not restored on back; that is left to the browser. replace
 // takes the place of the current entry of the history (a screen that only moves on), so that back does not return to
 // it.
-export function navigate(path: string, options: { replace?: boolean } = {}): void {
+// keepScroll leaves the scroll position as it is (a change of a filter or a period on the same screen).
+export function navigate(path: string, options: { replace?: boolean; keepScroll?: boolean } = {}): void {
   if (path !== getPath()) {
     if (options.replace === true) history.replaceState(null, "", path);
     else history.pushState(null, "", path);
     for (const listener of listeners) listener();
   }
-  window.scrollTo(0, 0);
+  if (options.keepScroll !== true) window.scrollTo(0, 0);
 }
 
 export type ClickEvent = {

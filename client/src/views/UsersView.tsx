@@ -17,7 +17,7 @@ type Role = User["role"];
 type AuthMode = UsersData["authMode"];
 type Operation = "role" | "password" | "logout" | "delete";
 
-const ROLE_LABELS: Record<Role, string> = { admin: "管理者", member: "一般" };
+const ROLE_LABELS: Record<Role, string> = { admin: "管理者", member: "メンバー" };
 const GONE_MESSAGE = "このユーザーは見つかりません。削除された可能性があります";
 const UNKNOWN_RESULT_MESSAGE = "サーバーに接続できませんでした。読み込み直して確かめてください";
 
@@ -28,28 +28,41 @@ export function UsersView({ client, currentUserId }: { client: ApiClient; curren
   // The result of the last operation, shown above the list until the next one. It stays across the reload
   // that follows, which may remove the row the operation was opened from.
   const [notice, setNotice] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
   useDocumentTitle(viewTitle(state, () => "ユーザー"));
 
   if (state.kind !== "ready") {
     return <ViewStatus state={state} notFoundMessage="ページが見つかりません" onReload={reload} />;
   }
   const { users, authMode } = state.data;
+  const canAdd = authMode === "password";
 
   return (
-    <main className="main">
+    <main className="page">
       <header className="page-head">
-        <h1>ユーザー</h1>
-        <p className="lead">この Querune にログインできる人です。管理者は、ユーザーの追加と権限の変更ができます。</p>
+        <div className="page-head-text">
+          <p className="eyebrow">管理</p>
+          <h1>ユーザー</h1>
+          <p className="lead">この Querune にログインできる人です。管理者はユーザーの追加と権限の変更ができます。</p>
+        </div>
+        {canAdd && !adding && (
+          <button type="button" className="button-primary" onClick={() => setAdding(true)}>
+            <PlusIcon />
+            ユーザーを追加
+          </button>
+        )}
       </header>
       {notice !== null && (
         <p className="notice" role="status">
           {notice}
         </p>
       )}
-      {authMode === "password" && (
+      {canAdd && adding && (
         <CreateUserForm
           client={client}
+          onClose={() => setAdding(false)}
           onCreated={() => {
+            setAdding(false);
             setNotice(null);
             reload();
           }}
@@ -73,23 +86,21 @@ export function UsersView({ client, currentUserId }: { client: ApiClient; curren
   );
 }
 
-function CreateUserForm({ client, onCreated }: { client: ApiClient; onCreated: () => void }) {
-  const [open, setOpen] = useState(false);
+function CreateUserForm({
+  client,
+  onClose,
+  onCreated,
+}: {
+  client: ApiClient;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
   const [sending, setSending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<Role>("member");
-
-  function openForm() {
-    setOpen(true);
-    setFailure(null);
-    setEmail("");
-    setName("");
-    setPassword("");
-    setRole("member");
-  }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -100,7 +111,6 @@ function CreateUserForm({ client, onCreated }: { client: ApiClient; onCreated: (
     switch (result.kind) {
       case "ok":
         setSending(false);
-        setOpen(false);
         onCreated();
         return;
       case "error":
@@ -117,16 +127,6 @@ function CreateUserForm({ client, onCreated }: { client: ApiClient; onCreated: (
     }
   }
 
-  if (!open) {
-    return (
-      <div className="actions">
-        <button type="button" className="button-primary" onClick={openForm}>
-          <PlusIcon />
-          ユーザーを追加
-        </button>
-      </div>
-    );
-  }
   return (
     <form className="folder-form" aria-label="ユーザーを追加" onSubmit={(event) => void onSubmit(event)}>
       <label>
@@ -166,7 +166,7 @@ function CreateUserForm({ client, onCreated }: { client: ApiClient; onCreated: (
         <button type="submit" disabled={sending}>
           追加
         </button>
-        <button type="button" onClick={() => setOpen(false)} disabled={sending}>
+        <button type="button" onClick={onClose} disabled={sending}>
           やめる
         </button>
       </div>
@@ -275,7 +275,7 @@ function UserRow({
   }
 
   const operationLabel = (operation: Operation) =>
-    operation === "role" ? (newRole === "admin" ? "管理者にする" : "一般に戻す") : OPERATION_LABELS[operation];
+    operation === "role" ? (newRole === "admin" ? "管理者にする" : "メンバーにする") : OPERATION_LABELS[operation];
 
   return (
     <li>
@@ -317,8 +317,8 @@ function UserRow({
             <p>
               {newRole === "admin"
                 ? `${userLabel(user)} を管理者にします。`
-                : `${userLabel(user)} を一般に戻します。最後の管理者は戻せません。`}
-              {isCurrentUser && newRole === "member" && "自分を一般に戻すと、この画面は使えなくなります。"}
+                : `${userLabel(user)} をメンバーにします。最後の管理者は変更できません。`}
+              {isCurrentUser && newRole === "member" && "自分をメンバーにするとこの画面は使えなくなります。"}
             </p>
           )}
           {open === "password" && (

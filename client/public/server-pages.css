@@ -6,31 +6,29 @@
 :root {
   color-scheme: light dark;
 
-  --font-sans: "Avenir Next", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", system-ui, -apple-system, "Yu Gothic UI",
-    "Meiryo", sans-serif;
-  /* The admin screens no longer use a serif; headings use the sans-serif family. */
+  --font-sans: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", system-ui, -apple-system,
+    "Segoe UI", "Meiryo", sans-serif;
   --font-serif: var(--font-sans);
 
-  --bg: #f3f5f9;
-  --surface: #ffffff;
-  --surface-2: #edf0f6;
-  --ink: #1b2433;
-  --ink-2: #465267;
-  --ink-3: #5f6b82;
-  --line: #e0e5ee;
-  --line-strong: #c6cedc;
-  --accent: #3655a0;
-  --accent-strong: #2a4483;
-  --accent-soft: #e6ecf8;
+  --bg: #f5f4f0;
+  --surface: #fdfcfa;
+  --surface-2: #f1f0ea;
+  --ink: #222e34;
+  --ink-2: #48545a;
+  --ink-3: #5d696f;
+  --line: #e1ddd2;
+  --line-strong: #c9c3b4;
+  --accent: #694795;
+  --accent-strong: #573a7d;
+  --accent-soft: #efe9f6;
   --on-accent: #ffffff;
-  --link: #2f4c93;
-  --focus: #3655a0;
+  --link: #5d3e86;
+  --focus: #694795;
   --danger: #b3261e;
   --danger-soft: #fbeceb;
-  --warning: #8f5500;
-  --warning-soft: #fbefd9;
-  --shadow: 0 1px 2px rgb(34 46 52 / 0.05), 0 8px 24px rgb(34 46 52 / 0.08);
-  /* The brand name: the text color, or white on dark backgrounds. */
+  --warning: #7a4a00;
+  --warning-soft: #fbefd6;
+  --shadow: 0 1px 2px rgb(25 28 27 / 0.05), 0 12px 32px -16px rgb(25 28 27 / 0.22);
   --logo-text: #222e34;
 
   --radius: 0.625rem;
@@ -38,26 +36,26 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0c111c;
-    --surface: #131a28;
-    --surface-2: #1a2233;
-    --ink: #e8ecf4;
-    --ink-2: #b6c0d3;
-    --ink-3: #8f9bb3;
-    --line: #222c40;
-    --line-strong: #34405a;
-    --accent: #8ea7ee;
-    --accent-strong: #b2c3f5;
-    --accent-soft: #1b2645;
-    --on-accent: #0c1430;
-    --link: #a4b8f3;
-    --focus: #a4b8f3;
-    --danger: #f08b80;
+    --bg: #101518;
+    --surface: #182024;
+    --surface-2: #1e272c;
+    --ink: #e8ecee;
+    --ink-2: #b6beb9;
+    --ink-3: #909994;
+    --line: #273136;
+    --line-strong: #3a464c;
+    --accent: #b69de0;
+    --accent-strong: #cdbbee;
+    --accent-soft: #2b2340;
+    --on-accent: #1b1129;
+    --link: #c4afe9;
+    --focus: #b69de0;
+    --danger: #f38f80;
     --danger-soft: #3a1f1c;
-    --warning: #f0b45a;
+    --warning: #f1bf6b;
     --warning-soft: #33260e;
     --logo-text: #ffffff;
-    --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 12px 32px rgb(0 0 0 / 0.4);
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 16px 36px -18px rgb(0 0 0 / 0.7);
   }
 }
 

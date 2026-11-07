@@ -92,7 +92,7 @@ export function Menu({
 
 export function NotFound({ message }: { message: string }) {
   return (
-    <main className="main empty-state">
+    <main className="page empty-state">
       <h1>{message}</h1>
       <p>
         <Link to="/" className="button">
@@ -131,7 +131,7 @@ export function ViewStatus({
 
 export function LoadError({ message, onReload }: { message: string; onReload: () => void }) {
   return (
-    <main className="main empty-state">
+    <main className="page empty-state">
       <h1>読み込みに失敗しました</h1>
       <p>{message}</p>
       <button type="button" onClick={onReload}>

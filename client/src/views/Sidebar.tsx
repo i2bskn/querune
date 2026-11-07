@@ -1,29 +1,60 @@
 import { type MouseEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
-import type { User } from "../../../src/api/types";
+import type { Site, User } from "../../../src/api/types";
 import { BRAND_NAME } from "../../../src/brand";
-import { BrandLogo } from "../brand";
-import { CloseIcon, LogoutIcon, MenuIcon, OverviewIcon, SitesIcon, UsersIcon } from "../icons";
+import { BrandLogo, BrandMark } from "../brand";
+import {
+  ArticleIcon,
+  ChartIcon,
+  CloseIcon,
+  ImportIcon,
+  LogoutIcon,
+  MemoIcon,
+  MenuIcon,
+  SettingsIcon,
+  SitesIcon,
+  UsersIcon,
+} from "../icons";
 import { Link } from "../Link";
-import { type NavItemId, ariaCurrentFor, navGroupsFor } from "../nav";
-import type { Route } from "../router";
+import { type ApiClient, loadSites, useView } from "../load";
+import {
+  type GlobalNavItemId,
+  type SiteNavItemId,
+  SITE_NAV,
+  ariaCurrentForGlobal,
+  ariaCurrentForSite,
+  currentSiteNavItem,
+  globalNavFor,
+  siteOfRoute,
+} from "../nav";
+import { type Route, navigate } from "../router";
+import { setCurrentSite, useCurrentSite, useSitesVersion } from "../siteContext";
 
 // Wide screens show the sidebar; narrow ones show a top bar whose button opens the same content in a drawer.
-// Keep in sync with the (width >= 900px) and (width < 900px) rules in styles.css.
-const WIDE_QUERY = "(width >= 900px)";
+// Keep in sync with the (width >= 1024px) rules in styles.css.
+const WIDE_QUERY = "(width >= 1024px)";
 
-const ICONS: Record<NavItemId, () => ReactNode> = {
-  overview: OverviewIcon,
+const SITE_ICONS: Record<SiteNavItemId, () => ReactNode> = {
+  performance: ChartIcon,
+  articles: ArticleIcon,
+  memos: MemoIcon,
+  data: ImportIcon,
+  settings: SettingsIcon,
+};
+
+const GLOBAL_ICONS: Record<GlobalNavItemId, () => ReactNode> = {
   sites: SitesIcon,
   users: UsersIcon,
 };
 
 // The frame around every screen once the signed-in user is known.
 export function AppShell({
+  client,
   user,
   route,
   path,
   children,
 }: {
+  client: ApiClient;
   user: User;
   route: Route;
   path: string;
@@ -34,13 +65,20 @@ export function AppShell({
   const dialogRef = useRef<HTMLDialogElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
-  // Set when the drawer is closed because the screen became wide: the menu button is hidden then, so the focus is
-  // left alone.
   const closedByWidth = useRef(false);
   const lastPath = useRef(path);
+  const version = useSitesVersion();
+  const [sitesState] = useView(() => loadSites(client), `shell-sites:${version}`);
+  const sites = sitesState.kind === "ready" ? sitesState.data : [];
+  const routeSite = siteOfRoute(route);
+  const stored = useCurrentSite();
+  const siteId = routeSite ?? stored;
+  const site = sites.find((candidate) => candidate.id === siteId) ?? null;
 
-  // The content is rendered once open is set; the dialog is shown after that, with the focus on the close button.
-  // The page behind it does not scroll while it is open.
+  useEffect(() => {
+    if (routeSite !== null) setCurrentSite(routeSite);
+  }, [routeSite]);
+
   useEffect(() => {
     if (!open) return;
     const dialog = dialogRef.current;
@@ -54,14 +92,12 @@ export function AppShell({
     };
   }, [open]);
 
-  // Closed after a move to another screen, including the browser's back and forward buttons.
   useEffect(() => {
     if (lastPath.current === path) return;
     lastPath.current = path;
     if (dialogRef.current?.open) dialogRef.current.close();
   }, [path]);
 
-  // Closed when the screen becomes wide enough for the sidebar.
   useEffect(() => {
     const query = window.matchMedia(WIDE_QUERY);
     function onChange() {
@@ -74,8 +110,6 @@ export function AppShell({
     return () => query.removeEventListener("change", onChange);
   }, []);
 
-  // Fired for every way of closing: the close button, Escape, the backdrop, a link, a move and the width. Clearing
-  // open removes the content and, through the effect above, gives the page its scrolling back.
   function onClose() {
     setOpen(false);
     if (closedByWidth.current) {
@@ -85,27 +119,27 @@ export function AppShell({
     menuButtonRef.current?.focus();
   }
 
-  // The content covers the whole dialog, so a click on the dialog itself is a click on the backdrop.
   function onDialogClick(event: MouseEvent<HTMLDialogElement>) {
     if (event.target === event.currentTarget) event.currentTarget.close();
   }
 
-  // A link chosen in the drawer closes it, even one to the screen already shown.
   function onContentClick(event: MouseEvent<HTMLDivElement>) {
     if (event.target instanceof Element && event.target.closest("a") !== null) dialogRef.current?.close();
   }
 
+  const content = <SidebarContent user={user} route={route} sites={sites} site={site} />;
+
   return (
-    <div className="app-shell">
-      <div className="sidebar">
-        <SidebarContent user={user} route={route} />
-      </div>
-      <div className="app-main">
+    <div className="shell">
+      <aside className="rail" aria-label="ナビゲーション">
+        {content}
+      </aside>
+      <div className="shell-main">
         <header className="topbar">
           <button
             ref={menuButtonRef}
             type="button"
-            className="topbar-button"
+            className="icon-button"
             aria-label="メニュー"
             aria-expanded={open}
             aria-controls={drawerId}
@@ -114,26 +148,26 @@ export function AppShell({
             <MenuIcon />
           </button>
           <Link to="/" className="brand">
-            <BrandLogo />
+            <BrandMark />
             <span className="sr-only">{BRAND_NAME}</span>
           </Link>
+          {site !== null && <span className="topbar-site">{site.name}</span>}
         </header>
         {children}
       </div>
-      {/* Shown in the top layer by showModal(), which also traps the focus and closes on Escape. */}
       <dialog ref={dialogRef} id={drawerId} className="drawer" aria-label="メニュー" onClose={onClose} onClick={onDialogClick}>
         {open && (
           <div className="drawer-content" onClick={onContentClick}>
             <button
               ref={closeButtonRef}
               type="button"
-              className="drawer-close"
+              className="icon-button drawer-close"
               aria-label="メニューを閉じる"
               onClick={() => dialogRef.current?.close()}
             >
               <CloseIcon />
             </button>
-            <SidebarContent user={user} route={route} />
+            {content}
           </div>
         )}
       </dialog>
@@ -141,63 +175,89 @@ export function AppShell({
   );
 }
 
-// The wordmark, the sections grouped, and the account at the bottom. Rendered in the sidebar and in the drawer, so the
-// IDs come from useId.
-function SidebarContent({ user, route }: { user: User; route: Route }) {
-  const baseId = useId();
+function SidebarContent({ user, route, sites, site }: { user: User; route: Route; sites: Site[]; site: Site | null }) {
   const name = user.name ?? user.email;
   return (
-    <div className="sidebar-content">
+    <div className="rail-content">
       <Link to="/" className="brand">
         <BrandLogo />
         <span className="sr-only">{BRAND_NAME}</span>
       </Link>
-      <nav className="nav" aria-label="メイン">
-        {navGroupsFor(user.role).map((group) => {
-          // Not a heading: the screen's h1 comes after the navigation.
-          const labelId = `${baseId}-${group.id}`;
-          return (
-            <div key={group.id} className="nav-group">
-              {group.label !== null && (
-                <p className="nav-group-label" id={labelId}>
-                  {group.label}
-                </p>
-              )}
-              <ul className="nav-list" aria-labelledby={group.label !== null ? labelId : undefined}>
-                {group.items.map((item) => {
-                  const ItemIcon = ICONS[item.id];
-                  return (
-                    <li key={item.id}>
-                      <Link to={item.to} className="nav-link" aria-current={ariaCurrentFor(route, item.id)}>
-                        <ItemIcon />
-                        {item.label}
-                      </Link>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          );
-        })}
+      {sites.length > 0 && <SiteSwitcher sites={sites} site={site} route={route} />}
+      {site !== null && (
+        <nav className="nav" aria-label={`${site.name} の画面`}>
+          <ul className="nav-list">
+            {SITE_NAV.map((item) => {
+              const ItemIcon = SITE_ICONS[item.id];
+              return (
+                <li key={item.id}>
+                  <Link to={item.path(site.id)} className="nav-link" aria-current={ariaCurrentForSite(route, item.id)}>
+                    <ItemIcon />
+                    {item.label}
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </nav>
+      )}
+      <nav className="nav nav-global" aria-label="全体">
+        <ul className="nav-list">
+          {globalNavFor(user.role).map((item) => {
+            const ItemIcon = GLOBAL_ICONS[item.id];
+            return (
+              <li key={item.id}>
+                <Link to={item.to} className="nav-link" aria-current={ariaCurrentForGlobal(route, item.id)}>
+                  <ItemIcon />
+                  {item.label}
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
       </nav>
       <div className="account">
-        <div className="account-card">
-          <span className="avatar" aria-hidden="true">
-            {Array.from(name)[0]?.toUpperCase()}
-          </span>
-          <div className="account-card-text">
-            <span className="account-card-name">{name}</span>
-            {user.name !== null && <span className="account-card-email">{user.email}</span>}
-            <span className="account-card-role">{user.role === "admin" ? "管理者" : "一般"}</span>
-          </div>
-        </div>
+        <span className="avatar" aria-hidden="true">
+          {Array.from(name)[0]?.toUpperCase()}
+        </span>
+        <span className="account-text">
+          <span className="account-name">{name}</span>
+          <span className="account-role">{user.role === "admin" ? "管理者" : "メンバー"}</span>
+        </span>
         <form method="post" action="/auth/logout">
-          <button type="submit" className="menu-item">
+          <button type="submit" className="icon-button" aria-label="ログアウト" title="ログアウト">
             <LogoutIcon />
-            ログアウト
           </button>
         </form>
       </div>
     </div>
+  );
+}
+
+// The site the screens are about. Choosing another site keeps the kind of screen (the memos of the other site).
+function SiteSwitcher({ sites, site, route }: { sites: Site[]; site: Site | null; route: Route }) {
+  const item = currentSiteNavItem(route) ?? "performance";
+  const target = SITE_NAV.find((candidate) => candidate.id === item) ?? SITE_NAV[0];
+  return (
+    <label className="switcher">
+      <span className="switcher-label">サイト</span>
+      <select
+        className={site === null ? "switcher-empty" : undefined}
+        value={site?.id ?? ""}
+        onChange={(event) => {
+          const id = event.target.value;
+          if (id === "" || target === undefined) return;
+          setCurrentSite(id);
+          navigate(target.path(id));
+        }}
+      >
+        {site === null && <option value="">サイトを選ぶ</option>}
+        {sites.map((candidate) => (
+          <option key={candidate.id} value={candidate.id}>
+            {candidate.name}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }

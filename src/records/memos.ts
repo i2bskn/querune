@@ -109,6 +109,11 @@ export async function listMemos(
 ): Promise<{ memos: MemoListItem[]; nextOffset: number | null } | null> {
   if (!(await siteExists(d1, siteId))) return null;
   const clause = where("site_id = ?", siteId);
+  if (filters.q !== undefined) {
+    // instr, not LIKE, so that % and _ in the words match themselves. lower() folds ASCII letters only.
+    clause.sql.push("(instr(lower(title), lower(?)) > 0 OR instr(lower(content), lower(?)) > 0)");
+    clause.values.push(filters.q, filters.q);
+  }
   if (filters.tag !== undefined) add(clause, TAG_FILTER_SQL, filters.tag);
   if (filters.articleId !== undefined) {
     add(clause, "id IN (SELECT memo_id FROM memo_articles WHERE article_id = ?)", filters.articleId);

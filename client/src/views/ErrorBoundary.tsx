@@ -14,7 +14,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode; fallback?: R
     if (!this.state.failed) return this.props.children;
     if (this.props.fallback !== undefined) return this.props.fallback;
     return (
-      <main className="main">
+      <main className="page">
         <h1>表示中にエラーが発生しました</h1>
         <button type="button" onClick={() => location.reload()}>
           再読み込み

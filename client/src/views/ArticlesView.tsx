@@ -1,17 +1,13 @@
-import { type FormEvent, useState } from "react";
-import type { Article, ArticleSummary, Site, TagList } from "../../../src/api/types";
+import { type FormEvent, useEffect, useState } from "react";
+import type { ArticleSummary, Site, TagList } from "../../../src/api/types";
 import { type ItemResult, createArticle } from "../actions";
 import { PlusIcon } from "../icons";
 import { Link } from "../Link";
 import { type ApiClient, loadArticlesView, useView } from "../load";
-import {
-  type ArticleFormValues,
-  EMPTY_ARTICLE_FORM,
-  TEXT_MAX,
-  TITLE_MAX,
-  articleRequest,
-} from "../records";
+import { formatDate, shortUrl } from "../numbers";
+import { type ArticleFormValues, EMPTY_ARTICLE_FORM, TEXT_MAX, TITLE_MAX, articleRequest } from "../records";
 import { navigate, searchParams } from "../router";
+import { setCurrentSite } from "../siteContext";
 import { ViewStatus, useDocumentTitle, useFlashNotice, viewTitle } from "./common";
 import { UNKNOWN_RESULT_MESSAGE } from "./SitesView";
 
@@ -25,8 +21,12 @@ export function ArticlesView({ client, siteId, path }: { client: ApiClient; site
   const tag = searchParams(path).get("tag");
   const [state, reload] = useView(() => loadArticlesView(client, siteId, tag), `articles:${siteId}:${tag ?? ""}`);
   const [notice, setNotice] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
   useFlashNotice(setNotice);
   useDocumentTitle(viewTitle(state, (data) => `記事 - ${data.site.name}`));
+  useEffect(() => {
+    if (state.kind === "ready") setCurrentSite(state.data.site.id);
+  }, [state]);
 
   if (state.kind !== "ready") {
     return <ViewStatus state={state} notFoundMessage={SITE_GONE_MESSAGE} onReload={reload} />;
@@ -35,54 +35,45 @@ export function ArticlesView({ client, siteId, path }: { client: ApiClient; site
   const base = `/sites/${site.id}/articles`;
 
   return (
-    <main className="main">
-      <SiteBreadcrumb site={site} />
+    <main className="page">
       <header className="page-head">
-        <h1>記事</h1>
-        <p className="lead">記事の台帳です。公開日のない記事が先、続いて公開日の新しい順に並びます。</p>
+        <div className="page-head-text">
+          <p className="eyebrow">{site.name}</p>
+          <h1>記事</h1>
+          <p className="lead">記事の台帳です。URL を登録した記事は開くと検索とセッションの推移を見られます。</p>
+        </div>
+        {!adding && (
+          <button type="button" className="button-primary" onClick={() => setAdding(true)}>
+            <PlusIcon />
+            記事を追加
+          </button>
+        )}
       </header>
       {notice !== null && (
         <p className="notice" role="status">
           {notice}
         </p>
       )}
-      <CreateArticleForm client={client} site={site} />
+      {adding && <CreateArticleForm client={client} site={site} onClose={() => setAdding(false)} />}
       <TagFilter
         tags={tags}
         value={tag}
-        onChange={(next) => navigate(next === null ? base : `${base}?tag=${encodeURIComponent(next)}`)}
+        onChange={(next) =>
+          navigate(next === null ? base : `${base}?tag=${encodeURIComponent(next)}`, { keepScroll: true })
+        }
       />
       {articles.length === 0 ? (
-        <p className="notice">{tag === null ? "記事はまだ登録されていません。" : "このタグの記事はありません。"}</p>
+        <p className="empty-note">
+          {tag === null ? "記事はまだ登録されていません。" : "このタグの記事はありません。"}
+        </p>
       ) : (
-        <ArticleList articles={articles} />
+        <ArticleList articles={articles} site={site} />
       )}
     </main>
   );
 }
 
-// サイト › <site name>, the start of the breadcrumbs of the screens of a site.
-export function SiteBreadcrumb({ site, section }: { site: Site; section?: "articles" | "memos" }) {
-  return (
-    <p className="breadcrumb">
-      <Link to="/sites">サイト</Link> › <Link to={`/sites/${site.id}`}>{site.name}</Link>
-      {section === "articles" && (
-        <>
-          {" "}
-          › <Link to={`/sites/${site.id}/articles`}>記事</Link>
-        </>
-      )}
-      {section === "memos" && (
-        <>
-          {" "}
-          › <Link to={`/sites/${site.id}/memos`}>メモ</Link>
-        </>
-      )}
-    </p>
-  );
-}
-
-// A select of the tags of the site. null is every tag. A value missing from the tags is kept as an option.
+// The tags used by the articles as buttons. Choosing the chosen tag again clears it.
 export function TagFilter({
   tags,
   value,
@@ -92,20 +83,30 @@ export function TagFilter({
   value: string | null;
   onChange: (tag: string | null) => void;
 }) {
-  const names = tags.tags.map((tag) => tag.tag);
+  const used = tags.tags.filter((tag) => tag.articles > 0);
+  if (used.length === 0 && value === null) return null;
+  const names = used.map((tag) => tag.tag);
   if (value !== null && !names.includes(value)) names.unshift(value);
   return (
-    <label className="filter">
-      タグ
-      <select value={value ?? ""} onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}>
-        <option value="">すべて</option>
-        {names.map((name) => (
-          <option key={name} value={name}>
-            {name}
-          </option>
-        ))}
-      </select>
-    </label>
+    <div className="chips chips-scroll" role="group" aria-label="タグで絞り込む">
+      <button type="button" className="chip" aria-pressed={value === null} onClick={() => onChange(null)}>
+        すべて
+      </button>
+      {names.map((name) => (
+        <button
+          key={name}
+          type="button"
+          className="chip"
+          aria-pressed={value === name}
+          onClick={() => onChange(value === name ? null : name)}
+        >
+          {name}
+          {used.find((tag) => tag.tag === name) !== undefined && (
+            <span className="chip-count">{used.find((tag) => tag.tag === name)?.articles}</span>
+          )}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -122,20 +123,25 @@ export function Tags({ tags }: { tags: string[] }) {
   );
 }
 
-function ArticleList({ articles }: { articles: ArticleSummary[] }) {
+function ArticleList({ articles, site }: { articles: ArticleSummary[]; site: Site }) {
   return (
-    <ul className="list">
+    <ul className="article-list">
+      <li className="article-head" aria-hidden="true">
+        <span>記事</span>
+        <span>公開日</span>
+        <span>タグ</span>
+      </li>
       {articles.map((article) => (
         <li key={article.id}>
-          <Link to={`/articles/${article.id}`} className="site-link">
-            <span className="site-head">
-              <span className="site-name">{article.title}</span>
-              {article.url !== null && <span className="site-url">{article.url}</span>}
+          <Link to={`/articles/${article.id}`} className="article-row">
+            <span className="article-main">
+              <span className="article-title">{article.title}</span>
+              <span className="article-url mono">{article.url === null ? "URL 未設定" : shortUrl(article.url, site.url)}</span>
             </span>
-            <span className="site-meta">
-              <span>公開日: {article.published_on ?? "未設定"}</span>
-              <Tags tags={article.tags} />
+            <span className="article-date">
+              {article.published_on === null ? <span className="pill">未公開</span> : formatDate(article.published_on)}
             </span>
+            <Tags tags={article.tags} />
           </Link>
         </li>
       ))}
@@ -143,8 +149,7 @@ function ArticleList({ articles }: { articles: ArticleSummary[] }) {
   );
 }
 
-function CreateArticleForm({ client, site }: { client: ApiClient; site: Site }) {
-  const [open, setOpen] = useState(false);
+function CreateArticleForm({ client, site, onClose }: { client: ApiClient; site: Site; onClose: () => void }) {
   const [sending, setSending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [values, setValues] = useState<ArticleFormValues>(EMPTY_ARTICLE_FORM);
@@ -164,36 +169,23 @@ function CreateArticleForm({ client, site }: { client: ApiClient; site: Site }) 
     }
   }
 
-  if (!open) {
-    return (
-      <div className="actions">
-        <button
-          type="button"
-          className="button-primary"
-          onClick={() => {
-            setOpen(true);
-            setValues(EMPTY_ARTICLE_FORM);
-            setFailure(null);
-          }}
-        >
-          <PlusIcon />
-          記事を追加
-        </button>
-      </div>
-    );
-  }
   return (
-    <form className="folder-form" aria-label="記事を追加" onSubmit={(event) => void onSubmit(event)}>
+    <form className="panel form editor" aria-label="記事を追加" onSubmit={(event) => void onSubmit(event)}>
+      <h2 className="panel-title">記事を追加</h2>
       <ArticleFields values={values} onChange={setValues} disabled={sending} />
-      <div className="folder-form-actions">
-        <button type="submit" disabled={sending}>
+      <div className="form-actions">
+        <button type="submit" className="button-primary" disabled={sending}>
           追加
         </button>
-        <button type="button" onClick={() => setOpen(false)} disabled={sending}>
+        <button type="button" onClick={onClose} disabled={sending}>
           やめる
         </button>
       </div>
-      {failure !== null && <p role="alert">{failure}</p>}
+      {failure !== null && (
+        <p className="form-error" role="alert">
+          {failure}
+        </p>
+      )}
     </form>
   );
 }
@@ -221,7 +213,6 @@ export function handleItemResult<T>(
       setFailure(unknownMessage);
       return false;
     case "redirecting":
-      // The move to the login page has started; the buttons stay disabled.
       return false;
   }
 }
@@ -238,44 +229,67 @@ export function ArticleFields({
 }) {
   return (
     <>
-      <label>
-        タイトル（{TITLE_MAX}&nbsp;文字以内）
+      <label className="field">
+        <span className="field-label">タイトル</span>
         <input
           type="text"
           value={values.title}
           onChange={(event) => onChange({ ...values, title: event.target.value })}
           autoComplete="off"
           required
+          maxLength={TITLE_MAX}
           disabled={disabled}
         />
       </label>
-      <label>
-        URL（省略可。# 以降は保存されません）
+      <div className="field-row">
+        <label className="field">
+          <span className="field-label">
+            URL<span className="optional">任意</span>
+          </span>
+          <input
+            type="url"
+            value={values.url}
+            onChange={(event) => onChange({ ...values, url: event.target.value })}
+            autoComplete="off"
+            placeholder="https://example.com/articles/1"
+            disabled={disabled}
+          />
+          <span className="field-hint">Search Console のページと同じ URL にすると実績を表示できます</span>
+        </label>
+        <label className="field">
+          <span className="field-label">
+            公開日<span className="optional">任意</span>
+          </span>
+          <input
+            type="date"
+            value={values.publishedOn}
+            onChange={(event) => onChange({ ...values, publishedOn: event.target.value })}
+            disabled={disabled}
+          />
+        </label>
+      </div>
+      <label className="field">
+        <span className="field-label">
+          タグ<span className="optional">任意</span>
+        </span>
         <input
-          type="url"
-          value={values.url}
-          onChange={(event) => onChange({ ...values, url: event.target.value })}
+          type="text"
+          value={values.tags}
+          onChange={(event) => onChange({ ...values, tags: event.target.value })}
           autoComplete="off"
-          placeholder="https://example.com/articles/1"
+          placeholder="例: AI, セキュリティ"
           disabled={disabled}
         />
+        <span className="field-hint">カンマか読点で区切ります</span>
       </label>
-      <label>
-        公開日（省略可）
-        <input
-          type="date"
-          value={values.publishedOn}
-          onChange={(event) => onChange({ ...values, publishedOn: event.target.value })}
-          disabled={disabled}
-        />
-      </label>
-      <TagsField value={values.tags} onChange={(tags) => onChange({ ...values, tags })} disabled={disabled} />
-      <label>
-        備考（省略可。{TEXT_MAX}&nbsp;文字以内）
+      <label className="field">
+        <span className="field-label">
+          備考<span className="optional">任意・{TEXT_MAX.toLocaleString("ja-JP")}&nbsp;文字以内</span>
+        </span>
         <textarea
           value={values.note}
           onChange={(event) => onChange({ ...values, note: event.target.value })}
-          rows={5}
+          rows={4}
           disabled={disabled}
         />
       </label>
@@ -283,52 +297,3 @@ export function ArticleFields({
   );
 }
 
-export function TagsField({
-  value,
-  onChange,
-  disabled,
-  placeholder = "stage:draft, topic:ai",
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  disabled: boolean;
-  placeholder?: string;
-}) {
-  return (
-    <label>
-      タグ（省略可。カンマか読点で区切ります）
-      <input
-        type="text"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        autoComplete="off"
-        placeholder={placeholder}
-        disabled={disabled}
-      />
-    </label>
-  );
-}
-
-// The article as plain text details: URL, publish date, tags, note and times.
-export function ArticleDetails({ article }: { article: Article }) {
-  return (
-    <dl className="details">
-      <dt>URL</dt>
-      <dd>
-        {article.url === null ? (
-          "未設定"
-        ) : (
-          <a href={article.url} target="_blank" rel="noopener noreferrer" className="site-url">
-            {article.url}
-          </a>
-        )}
-      </dd>
-      <dt>公開日</dt>
-      <dd>{article.published_on ?? "未設定"}</dd>
-      <dt>タグ</dt>
-      <dd>{article.tags.length === 0 ? "なし" : <Tags tags={article.tags} />}</dd>
-      <dt>備考</dt>
-      <dd>{article.note === "" ? "なし" : <span className="text-body">{article.note}</span>}</dd>
-    </dl>
-  );
-}

@@ -28,6 +28,8 @@ describe("matchRoute", () => {
     expect(matchRoute(`/sites/${site}/articles`)).toEqual({ name: "siteArticles", id: site });
     expect(matchRoute(`/sites/${site}/articles?tag=a`)).toEqual({ name: "siteArticles", id: site });
     expect(matchRoute(`/sites/${site}/memos?article=${article}`)).toEqual({ name: "siteMemos", id: site });
+    expect(matchRoute(`/sites/${site}/data`)).toEqual({ name: "siteData", id: site });
+    expect(matchRoute(`/sites/${site}/settings`)).toEqual({ name: "siteSettings", id: site });
     expect(matchRoute(`/articles/${article}`)).toEqual({ name: "articleDetail", id: article });
     expect(matchRoute(`/memos/${memo}`)).toEqual({ name: "memoDetail", id: memo });
     for (const path of [

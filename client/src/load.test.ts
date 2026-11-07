@@ -224,7 +224,10 @@ const MEMO: Memo = {
   updated_at: 2,
 };
 const MEMO_LIST: MemoList = {
-  memos: [{ ...MEMO, articles: [{ id: ARTICLE.id, title: "Guide" }] }].map(({ content: _content, ...rest }) => rest),
+  memos: [{ ...MEMO, articles: [{ id: ARTICLE.id, title: "Guide" }] }].map(({ content: _content, ...rest }) => ({
+    ...rest,
+    content_preview: "",
+  })),
   next_offset: null,
 };
 

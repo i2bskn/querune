@@ -1,58 +1,98 @@
 import { describe, expect, it } from "vitest";
-import { ariaCurrentFor, currentNavItem, navGroupsFor } from "./nav";
+import {
+  SITE_NAV,
+  ariaCurrentForGlobal,
+  ariaCurrentForSite,
+  currentSiteNavItem,
+  globalNavFor,
+  siteOfRoute,
+} from "./nav";
 import type { Route } from "./router";
 
-describe("navGroupsFor", () => {
+describe("globalNavFor", () => {
   it("shows the sites to members, without the users", () => {
-    const groups = navGroupsFor("member");
-    expect(groups.map((group) => group.label)).toEqual(["サイト"]);
-    expect(groups[0]?.items.map((item) => [item.id, item.label, item.to])).toEqual([
-      ["overview", "概要", "/"],
-      ["sites", "サイト", "/sites"],
-    ]);
-    expect(groups.flatMap((group) => group.items.map((item) => item.id))).not.toContain("users");
+    expect(globalNavFor("member").map((item) => [item.id, item.to])).toEqual([["sites", "/"]]);
   });
 
-  it("shows the users to admins under 管理", () => {
-    const groups = navGroupsFor("admin");
-    expect(groups.map((group) => group.label)).toEqual(["サイト", "管理"]);
-    expect(groups.at(-1)?.items.map((item) => [item.id, item.label, item.to])).toEqual([["users", "ユーザー", "/users"]]);
+  it("shows the users to admins", () => {
+    expect(globalNavFor("admin").map((item) => [item.id, item.to])).toEqual([
+      ["sites", "/"],
+      ["users", "/users"],
+    ]);
   });
 });
 
-describe("currentNavItem", () => {
-  it.each<[Route, ReturnType<typeof currentNavItem>]>([
-    [{ name: "home" }, "overview"],
-    [{ name: "sites" }, "sites"],
-    [{ name: "siteDetail", id: "site_1" }, "sites"],
-    [{ name: "siteArticles", id: "site_1" }, "sites"],
-    [{ name: "siteMemos", id: "site_1" }, "sites"],
-    [{ name: "articleDetail", id: "art_1" }, "sites"],
-    [{ name: "memoDetail", id: "memo_1" }, "sites"],
-    [{ name: "users" }, "users"],
+describe("SITE_NAV", () => {
+  it("links the screens of a site", () => {
+    expect(SITE_NAV.map((item) => [item.id, item.path("site_1")])).toEqual([
+      ["performance", "/sites/site_1"],
+      ["memos", "/sites/site_1/memos"],
+      ["articles", "/sites/site_1/articles"],
+      ["data", "/sites/site_1/data"],
+      ["settings", "/sites/site_1/settings"],
+    ]);
+  });
+});
+
+describe("siteOfRoute", () => {
+  it.each<[Route, string | null]>([
+    [{ name: "siteDetail", id: "site_1" }, "site_1"],
+    [{ name: "siteArticles", id: "site_1" }, "site_1"],
+    [{ name: "siteMemos", id: "site_1" }, "site_1"],
+    [{ name: "siteData", id: "site_1" }, "site_1"],
+    [{ name: "siteSettings", id: "site_1" }, "site_1"],
+    [{ name: "articleDetail", id: "art_1" }, null],
+    [{ name: "memoDetail", id: "memo_1" }, null],
+    [{ name: "home" }, null],
+    [{ name: "users" }, null],
+  ])("maps %o", (route, expected) => {
+    expect(siteOfRoute(route)).toBe(expected);
+  });
+});
+
+describe("currentSiteNavItem", () => {
+  it.each<[Route, string | null]>([
+    [{ name: "siteDetail", id: "site_1" }, "performance"],
+    [{ name: "siteArticles", id: "site_1" }, "articles"],
+    [{ name: "articleDetail", id: "art_1" }, "articles"],
+    [{ name: "siteMemos", id: "site_1" }, "memos"],
+    [{ name: "memoDetail", id: "memo_1" }, "memos"],
+    [{ name: "siteData", id: "site_1" }, "data"],
+    [{ name: "siteSettings", id: "site_1" }, "settings"],
+    [{ name: "home" }, null],
+    [{ name: "sites" }, null],
+    [{ name: "users" }, null],
     [{ name: "notFound" }, null],
   ])("maps %o", (route, expected) => {
-    expect(currentNavItem(route)).toBe(expected);
+    expect(currentSiteNavItem(route)).toBe(expected);
   });
 });
 
-describe("ariaCurrentFor", () => {
-  it("is page on the top screen of the item", () => {
-    expect(ariaCurrentFor({ name: "home" }, "overview")).toBe("page");
-    expect(ariaCurrentFor({ name: "sites" }, "sites")).toBe("page");
-    expect(ariaCurrentFor({ name: "users" }, "users")).toBe("page");
+describe("ariaCurrentForSite", () => {
+  it("is page on the screen of the item", () => {
+    expect(ariaCurrentForSite({ name: "siteMemos", id: "site_1" }, "memos")).toBe("page");
   });
 
   it("is location on a screen inside the item", () => {
-    expect(ariaCurrentFor({ name: "siteDetail", id: "site_1" }, "sites")).toBe("location");
-    expect(ariaCurrentFor({ name: "articleDetail", id: "art_1" }, "sites")).toBe("location");
+    expect(ariaCurrentForSite({ name: "memoDetail", id: "memo_1" }, "memos")).toBe("location");
+    expect(ariaCurrentForSite({ name: "articleDetail", id: "art_1" }, "articles")).toBe("location");
   });
 
-  it("is undefined for other items and on the not found screen", () => {
-    expect(ariaCurrentFor({ name: "home" }, "sites")).toBeUndefined();
-    expect(ariaCurrentFor({ name: "siteDetail", id: "site_1" }, "overview")).toBeUndefined();
-    for (const item of ["overview", "sites", "users"] as const) {
-      expect(ariaCurrentFor({ name: "notFound" }, item)).toBeUndefined();
-    }
+  it("is undefined for other items", () => {
+    expect(ariaCurrentForSite({ name: "siteMemos", id: "site_1" }, "articles")).toBeUndefined();
+    expect(ariaCurrentForSite({ name: "notFound" }, "memos")).toBeUndefined();
+  });
+});
+
+describe("ariaCurrentForGlobal", () => {
+  it("marks the list of sites on / and /sites", () => {
+    expect(ariaCurrentForGlobal({ name: "home" }, "sites")).toBe("page");
+    expect(ariaCurrentForGlobal({ name: "sites" }, "sites")).toBe("page");
+    expect(ariaCurrentForGlobal({ name: "siteDetail", id: "site_1" }, "sites")).toBeUndefined();
+  });
+
+  it("marks the users on /users", () => {
+    expect(ariaCurrentForGlobal({ name: "users" }, "users")).toBe("page");
+    expect(ariaCurrentForGlobal({ name: "home" }, "users")).toBeUndefined();
   });
 });

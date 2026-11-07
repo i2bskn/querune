@@ -94,3 +94,98 @@ export function CloseIcon() {
     </Icon>
   );
 }
+
+// Performance: a rising line over a baseline.
+export function ChartIcon() {
+  return (
+    <Icon>
+      <path d="M4 19.5h16" />
+      <path d="M5 15.5l4-4.5 3.5 3 6.5-7.5" />
+      <path d="M15.5 6.5H19v3.5" />
+    </Icon>
+  );
+}
+
+// Articles: a page with lines.
+export function ArticleIcon() {
+  return (
+    <Icon>
+      <path d="M7 3.5h7.5L19 8v11.5a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-15a1 1 0 0 1 1-1z" />
+      <path d="M14 3.5V8.5h5M9 12.5h7M9 16h5" />
+    </Icon>
+  );
+}
+
+// Memos: a note with a folded corner and a pen stroke.
+export function MemoIcon() {
+  return (
+    <Icon>
+      <path d="M5 4.5h14v9.5l-5.5 5.5H5z" />
+      <path d="M13.5 19.5V14H19M8.5 9h7M8.5 12.5h4" />
+    </Icon>
+  );
+}
+
+// Data import: a tray with an arrow into it.
+export function ImportIcon() {
+  return (
+    <Icon>
+      <path d="M12 3.5v10M8 10l4 4 4-4" />
+      <path d="M4 14.5v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4" />
+    </Icon>
+  );
+}
+
+// Settings: sliders.
+export function SettingsIcon() {
+  return (
+    <Icon>
+      <path d="M4 7h9M17 7h3M4 17h3M11 17h9" />
+      <circle cx="15" cy="7" r="2" />
+      <circle cx="9" cy="17" r="2" />
+    </Icon>
+  );
+}
+
+export function SearchIcon() {
+  return (
+    <Icon>
+      <circle cx="10.5" cy="10.5" r="6" />
+      <path d="m15 15 5 5" />
+    </Icon>
+  );
+}
+
+export function ExternalIcon() {
+  return (
+    <Icon>
+      <path d="M13.5 4.5h6v6M19.5 4.5 11 13" />
+      <path d="M17.5 14v4.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1H10" />
+    </Icon>
+  );
+}
+
+export function CopyIcon() {
+  return (
+    <Icon>
+      <rect x="8.5" y="8.5" width="11" height="11" rx="1.5" />
+      <path d="M15.5 8.5V5.5a1 1 0 0 0-1-1h-9a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h3" />
+    </Icon>
+  );
+}
+
+export function ChevronDownIcon() {
+  return (
+    <Icon>
+      <path d="m6 9.5 6 6 6-6" />
+    </Icon>
+  );
+}
+
+export function ArrowLeftIcon() {
+  return (
+    <Icon>
+      <path d="M19 12H5M11 6l-6 6 6 6" />
+    </Icon>
+  );
+}

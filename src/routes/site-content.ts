@@ -98,9 +98,12 @@ const memoListQuery = queryCheck<MemoListQuery, { filters: MemoFilters; limit: n
 
 export const listSiteMemos = factory.createHandlers(memoListQuery, async (c) => {
   const { filters, limit, offset } = c.req.valid("query");
-  const result = await listMemos(c.get("db").$client, siteIdOf(c), filters, { limit, offset });
+  const result = await listMemos(c.get("db").$client, siteIdOf(c), filters, { limit, offset }, true);
   if (!result) return apiError(c, 404, "not_found", siteNotFound);
-  const body: MemoList = { memos: result.memos, next_offset: result.nextOffset };
+  const body: MemoList = {
+    memos: result.memos.map((memo) => ({ ...memo, content_preview: memo.content_preview ?? "" })),
+    next_offset: result.nextOffset,
+  };
   return c.json(body, 200);
 });
 

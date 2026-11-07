@@ -169,6 +169,71 @@
 | `retry_exhausted` | 一時的な失敗（401・429・5xx・通信エラー・D1の上限など）が再試行の上限まで続いた |
 | `enqueue_failed` | 取り込みをキューに送れなかった |
 
+### `GET /api/v1/sites/:id/insights`
+
+管理画面の実績に使う集計です。取り込んだ今のプロパティの行だけを集計します。
+
+| クエリ | 内容 |
+| --- | --- |
+| `days` | 期間の日数（1〜180、既定28） |
+| `end` | 期間の最後の日（`YYYY-MM-DD`、今日以前）。省略すると取り込み済みの最新の日 |
+| `article_id` | 指定するとその記事のURLのページ（GA4はURLのパス）だけを集計し、メモはその記事にひも付くものだけを返す |
+
+```json
+{
+  "site_id": "site_01JC9Z8Q4R6T2V7W3X5Y1A0B2C",
+  "period": { "start": "2026-10-10", "end": "2026-11-06", "days": 28 },
+  "previous_period": { "start": "2026-09-12", "end": "2026-10-09" },
+  "article": null,
+  "search": {
+    "property": "sc-domain:example.com",
+    "time_zone": "America/Los_Angeles",
+    "daily": [{ "date": "2026-09-12", "clicks": 15, "impressions": 588, "position": 7.1 }],
+    "totals": { "clicks": 1073, "impressions": 29989, "ctr": 0.0358, "position": 5.6 },
+    "previous_totals": { "clicks": 872, "impressions": 24840, "ctr": 0.0351, "position": 6.3 },
+    "pages": [{ "key": "https://example.com/a", "clicks": 357, "impressions": 7557, "ctr": 0.0472, "position": 1.8, "previous_clicks": 291, "previous_impressions": 6800, "previous_position": 2.4 }],
+    "queries": [],
+    "coverage": { "days": 28, "available_days": 28, "provisional_days": 3, "missing_days": 0, "truncated_days": 0, "time_zone": "America/Los_Angeles" }
+  },
+  "sessions": {
+    "property": "123456789",
+    "daily": [{ "date": "2026-09-12", "sessions": 151, "engaged_sessions": 80, "key_events": 1 }],
+    "totals": { "sessions": 5696, "engaged_sessions": 2811, "engagement_rate": 0.4935, "key_events": 31 },
+    "previous_totals": { "sessions": 4571, "engaged_sessions": 2153, "engagement_rate": 0.471, "key_events": 27 },
+    "channels": [{ "key": "Organic Search", "sessions": 3713, "engaged_sessions": 1900, "engagement_rate": 0.5117, "key_events": 20, "previous_sessions": 2990 }],
+    "landing_pages": [],
+    "coverage": { "days": 28, "available_days": 28, "provisional_days": 3, "missing_days": 0, "truncated_days": 0, "time_zone": "Asia/Tokyo" }
+  },
+  "memos": [{ "id": "memo_01JC9Z8Q4R6T2V7W3X5Y1A0B2C", "title": "タイトルを変更", "tags": ["改善"], "created_at": 1793000000000 }]
+}
+```
+
+- `daily`は前の期間の最初の日から期間の最後の日まで1日1件で、行のない日の値は`null`です。前の期間は期間の直前の同じ日数です。
+- `ctr`はクリック÷表示回数、`position`は表示回数で重み付けした平均掲載順位、`engagement_rate`はエンゲージのあったセッション÷セッションです。分母が0なら`null`です。
+- `pages`・`queries`はクリックの多い順、`channels`・`landing_pages`はセッションの多い順に10件までです。`previous_*`は前の期間に行がなければ`null`です。
+- `search`はSearch Consoleのプロパティがないか記事にURLがなければ`null`、`sessions`はGA4のプロパティがないか記事にURLがなければ`null`です。
+- `memos`は期間の前後1日を含めて作成されたメモを新しい順に100件までです。画面はブラウザの日付で各日に並べます。
+- クエリが正しくなければ400 `invalid_query`、サイトか記事（別のサイトの記事を含む）がなければ404 `not_found`です。
+
+### `GET /api/v1/sites/insights`
+
+全サイトの直近28日（UTCで昨日まで）のクリックとセッションを、サイトの一覧に使います。
+
+```json
+{
+  "period": { "start": "2026-10-10", "end": "2026-11-06", "days": 28 },
+  "sites": [
+    {
+      "site_id": "site_01JC9Z8Q4R6T2V7W3X5Y1A0B2C",
+      "clicks": { "daily": [28, 31], "total": 1073, "previous_total": 872 },
+      "sessions": null
+    }
+  ]
+}
+```
+
+- `daily`は期間の1日1件で、行のない日は0です。プロパティがなければ`clicks`・`sessions`は`null`です。
+
 ### 取り込みの仕組み
 
 - 取り込みは、1メッセージで1データセット×1日×2,000行までを処理します。2,000行を超える日は、続きのメッセージで次の2,000行を取り込みます。同じ日の取り込みは同じIDを持ち、取り込み直しが始まると古い取り込みのメッセージは捨てられます。
@@ -191,7 +256,7 @@
 | `GET /api/v1/articles/:id` | 記事1件 | 200 `Article` |
 | `PATCH /api/v1/articles/:id` | 記事の変更。本文は`title`、`url`、`published_on`、`tags`、`note`のうち変える項目だけ | 200 `Article` |
 | `DELETE /api/v1/articles/:id` | 記事の削除。メモは残り、その記事との関連付けだけを外す | 204 |
-| `GET /api/v1/sites/:id/memos` | サイトのメモの一覧（`content`を含まない） | 200 `{ "memos": MemoSummary[], "next_offset" }` |
+| `GET /api/v1/sites/:id/memos` | サイトのメモの一覧（`content`の代わりに先頭300文字の`content_preview`を含む） | 200 `{ "memos": (MemoSummary & { "content_preview" })[], "next_offset" }` |
 | `POST /api/v1/sites/:id/memos` | メモの登録。本文は`{ "title", "content"?, "tags"?, "article_ids"? }` | 201 `Memo` |
 | `GET /api/v1/memos/:id` | メモ1件 | 200 `Memo` |
 | `PATCH /api/v1/memos/:id` | メモの変更。本文は登録と同じ項目のうち変える項目だけ | 200 `Memo` |
@@ -240,7 +305,7 @@
 
 - 記事の一覧は、公開日のない記事が先、続いて`published_on`の降順、同じ日は`id`の降順です。
 - メモの一覧は、`created_at`の降順（新しく作成した順）、同じ時刻は`id`の降順です。MCPの一覧と記事にひも付くメモも同じ並びです。
-- メモの一覧のクエリは`tag`、`article_id`、`created_after`、`created_before`、`limit`（1〜100、既定50）、`offset`（0〜2000、既定0）です。続きがあれば`next_offset`に次の`offset`を返し、なければ`null`です。
+- メモの一覧のクエリは`q`（タイトルか本文に含む語。ASCIIの英字は大文字小文字を区別しない。前後の空白を除いて100文字以下で、空なら絞り込まない）、`tag`、`article_id`、`created_after`、`created_before`、`limit`（1〜100、既定50）、`offset`（0〜2000、既定0）です。続きがあれば`next_offset`に次の`offset`を返し、なければ`null`です。
 - `created_after`はその時刻以降（その時刻を含む）、`created_before`はその時刻より前（その時刻を含まない）に作成したメモだけにします。値はオフセット付きのRFC 3339の日時です（例 `2026-10-01T00:00:00+09:00`、`2026-10-01T00:00:00Z`）。形式は`YYYY-MM-DDTHH:MM`、続けて省略できる`:SS`と小数秒（1〜3桁）、最後に`Z`か`±HH:MM`です。`T`と`Z`は大文字だけを受け付けます。両方を指定するときは、`created_after`を`created_before`より前にします。
 - `tag`はタグの規則で正規化してから完全一致で比べます。`article_id`は形式が正しければ、存在しない記事や別のサイトの記事でも空の一覧を返します。
 - 未知のクエリは無視します。値が正しくなければ`invalid_query`です。

@@ -1,4 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#222e34"/>
-  <text x="32" y="45" text-anchor="middle" font-family="Avenir Next, Helvetica, Arial, sans-serif" font-size="40" font-weight="700" fill="#ffffff">Q</text>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="Querune"><g color="#694795"><g fill="none" stroke="currentColor" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"><path d="M88 82C82 91 71 97 58 97C36 97 20 81 20 59C20 37 37 20 59 20C81 20 98 37 98 59C98 65 97 69 95 73" stroke-width="14"/><path d="M54 69C64 65 69 71 76 81L83 90Q91 103 108 99" stroke-width="13"/></g></g></svg>

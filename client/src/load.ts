@@ -3,6 +3,8 @@ import type {
   Article,
   ArticleSummary,
   GoogleStatus,
+  InsightsOverview,
+  InsightsResponse,
   Memo,
   MemoList,
   MemoListQuery,
@@ -118,6 +120,64 @@ export async function loadSiteDetail(client: ApiClient, id: string): Promise<Loa
   const site = await request(() => client.api.v1.sites[":id"].$get({ param: { id } }));
   if (site.kind !== "ok") return failure([site]);
   return { kind: "ready", data: site.value };
+}
+
+export type OverviewData = { sites: Site[]; overview: InsightsOverview };
+
+// Every site with its clicks and sessions of the last 28 days.
+export async function loadOverview(client: ApiClient): Promise<Loaded<OverviewData>> {
+  const [list, overview] = await Promise.all([
+    request(() => client.api.v1.sites.$get()),
+    request(() => client.api.v1.sites.insights.$get()),
+  ]);
+  if (list.kind === "redirecting" || overview.kind === "redirecting") return { kind: "redirecting" };
+  if (list.kind !== "ok") return { kind: "error", message: list.message };
+  if (overview.kind !== "ok") return { kind: "error", message: overview.message };
+  return { kind: "ready", data: { sites: list.value.sites, overview: overview.value } };
+}
+
+export type DashboardData = { site: Site; insights: InsightsResponse };
+
+// The figures of a site over days days. A deleted site is not found.
+export async function loadDashboard(client: ApiClient, id: string, days: number): Promise<Loaded<DashboardData>> {
+  if (!isValidId(id)) return { kind: "notFound" };
+  const param = { id };
+  const [site, insights] = await Promise.all([
+    request(() => client.api.v1.sites[":id"].$get({ param })),
+    request(() => client.api.v1.sites[":id"].insights.$get({ param, query: { days: String(days) } })),
+  ]);
+  if (site.kind !== "ok" || insights.kind !== "ok") return failure([site, insights]);
+  return { kind: "ready", data: { site: site.value, insights: insights.value } };
+}
+
+// The figures of a site over days days ending at end (YYYY-MM-DD).
+export async function loadInsightsAround(
+  client: ApiClient,
+  siteId: string,
+  end: string,
+  days: number,
+): Promise<Loaded<InsightsResponse>> {
+  if (!isValidId(siteId)) return { kind: "notFound" };
+  const insights = await request(() =>
+    client.api.v1.sites[":id"].insights.$get({ param: { id: siteId }, query: { days: String(days), end } }),
+  );
+  if (insights.kind !== "ok") return failure([insights]);
+  return { kind: "ready", data: insights.value };
+}
+
+// The figures of one article of a site over days days.
+export async function loadArticleInsights(
+  client: ApiClient,
+  siteId: string,
+  articleId: string,
+  days: number,
+): Promise<Loaded<InsightsResponse>> {
+  if (!isValidId(siteId) || !isValidId(articleId)) return { kind: "notFound" };
+  const insights = await request(() =>
+    client.api.v1.sites[":id"].insights.$get({ param: { id: siteId }, query: { days: String(days), article_id: articleId } }),
+  );
+  if (insights.kind !== "ok") return failure([insights]);
+  return { kind: "ready", data: insights.value };
 }
 
 export type SyncPanelData = { google: GoogleStatus; status: SyncStatus };

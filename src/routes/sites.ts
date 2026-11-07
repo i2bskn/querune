@@ -1,8 +1,10 @@
-import { Hono, type Context } from "hono";
+import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
 import type {
   CreateSiteRequest,
+  InsightsQuery,
+  InsightsResponse,
   Site,
   SiteList,
   SyncRequest,
@@ -11,10 +13,12 @@ import type {
 } from "../api/types";
 import { apiError, clock, describeError, isUniqueViolation, jsonBody, type Db } from "@i2bskn/workers-app-core";
 import { requireUser } from "../core";
-import { DATASETS, pendingPurges, sites, syncDays, type SiteRow } from "../db/schema";
+import { articles, DATASETS, pendingPurges, sites, syncDays, type ArticleRow, type SiteRow } from "../db/schema";
 import type { AppEnv } from "../env";
 import { parseServiceAccountKey } from "../google/credentials";
-import { newSiteId, newUlid, SITE_ID_PATTERN } from "../ids";
+import { ARTICLE_ID_PATTERN, newSiteId, newUlid, SITE_ID_PATTERN } from "../ids";
+import { checkInsightsQuery, getInsights, getOverview, INSIGHTS_DAYS_DEFAULT } from "../insights";
+import { articleNotFound } from "../records/common";
 import { datesBetween, daysBetween, isValidDate, subtractMonths, todayUtc } from "../sync/dates";
 import {
   datasetsOf,
@@ -206,6 +210,17 @@ function findSite(db: Db, id: string): Promise<SiteRow | undefined> {
   return db.select().from(sites).where(eq(sites.id, id)).get();
 }
 
+type InsightsInput = { days: number; end: string | null; articleId: string | null };
+
+// Validates the query of GET /:id/insights and passes it to c.req.valid("query").
+const insightsQuery: MiddlewareHandler<AppEnv, string, { in: { query: InsightsQuery }; out: { query: InsightsInput } }> =
+  async (c, next) => {
+    const result = checkInsightsQuery(c.req.query(), clock.now());
+    if (!result.ok) return apiError(c, 400, "invalid_query", `条件 ${result.name} が正しくありません`);
+    c.req.addValidatedData("query", { days: result.days, end: result.end, articleId: result.articleId });
+    return next();
+  };
+
 // Every signed-in user can read and change the sites; there is no per-site access control.
 const sitesApi = new Hono<AppEnv>()
   .use("*", requireUser)
@@ -240,6 +255,12 @@ const sitesApi = new Hono<AppEnv>()
     const created = await findSite(db, id);
     if (!created) throw new Error("created site not found");
     return c.json(toApiSite(created), 201);
+  })
+  // Before /:id, which would take "insights" as an ID.
+  .get("/insights", async (c) => {
+    const db = c.get("db");
+    const rows = await listSites(db);
+    return c.json(await getOverview(db.$client, rows, INSIGHTS_DAYS_DEFAULT, clock.now()), 200);
   })
   .get("/:id", async (c) => {
     const id = c.req.param("id");
@@ -389,6 +410,28 @@ const sitesApi = new Hono<AppEnv>()
     const site = SITE_ID_PATTERN.test(id) ? await findSite(db, id) : undefined;
     if (!site) return apiError(c, 404, "not_found", siteNotFound);
     return c.json(await getSyncStatus(db.$client, propertiesOf(site)), 200);
+  })
+  .get("/:id/insights", insightsQuery, async (c) => {
+    const id = c.req.param("id");
+    const db = c.get("db");
+    const query = c.req.valid("query");
+    const site = SITE_ID_PATTERN.test(id) ? await findSite(db, id) : undefined;
+    if (!site) return apiError(c, 404, "not_found", siteNotFound);
+    let article: ArticleRow | null = null;
+    if (query.articleId !== null) {
+      const row = ARTICLE_ID_PATTERN.test(query.articleId)
+        ? await db.select().from(articles).where(eq(articles.id, query.articleId)).get()
+        : undefined;
+      if (!row || row.siteId !== site.id) return apiError(c, 404, "not_found", articleNotFound);
+      article = row;
+    }
+    const body: InsightsResponse = await getInsights(
+      db.$client,
+      site,
+      { days: query.days, end: query.end, article },
+      clock.now(),
+    );
+    return c.json(body, 200);
   })
   .get("/:id/articles", ...listSiteArticles)
   .post("/:id/articles", ...createSiteArticle)

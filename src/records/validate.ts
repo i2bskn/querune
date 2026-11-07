@@ -12,6 +12,7 @@ export const URL_MAX = 2048;
 export const TEXT_MAX = 10000;
 export const MAX_TAGS = 20;
 export const TAG_MAX = 50;
+export const SEARCH_MAX = 100;
 
 export type Invalid = { ok: false; code: string; message: string };
 export type Check<T> = { ok: true; value: T } | Invalid;
@@ -236,6 +237,7 @@ export function checkMemoBody(body: Record<string, unknown>, required: boolean):
 
 // The filters of the list of memos (query string or tool arguments), checked with the code invalid_query.
 export type MemoFilterInput = {
+  q?: string | undefined;
   tag?: string | undefined;
   article_id?: string | undefined;
   created_after?: string | undefined;
@@ -244,6 +246,8 @@ export type MemoFilterInput = {
 
 // Times are UNIX time in milliseconds: createdAfter is included, createdBefore is not.
 export type MemoFilters = {
+  // Matched in the title or the content.
+  q?: string;
   tag?: string;
   articleId?: string;
   createdAfter?: number;
@@ -274,6 +278,14 @@ export function parseDateTime(value: string): number | null {
 
 export function checkMemoFilters(input: MemoFilterInput): Check<MemoFilters> {
   const filters: MemoFilters = {};
+  if (input.q !== undefined) {
+    const q = input.q.trim();
+    // Blank is no search, so that an emptied search box shows every memo.
+    if (q !== "") {
+      if ([...q].length > SEARCH_MAX || TAG_CONTROL.test(q)) return invalidQuery("q");
+      filters.q = q;
+    }
+  }
   const tag = checkTagFilter(input.tag);
   if (!tag.ok) return tag;
   if (tag.value !== undefined) filters.tag = tag.value;

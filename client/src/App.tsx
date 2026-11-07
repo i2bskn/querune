@@ -12,8 +12,9 @@ import { HomeView } from "./views/HomeView";
 import { MemoDetailView } from "./views/MemoDetailView";
 import { MemosView } from "./views/MemosView";
 import { AppShell } from "./views/Sidebar";
+import { DataView } from "./views/DataView";
+import { SettingsView } from "./views/SettingsView";
 import { SiteDetailView } from "./views/SiteDetailView";
-import { SitesView } from "./views/SitesView";
 import { UsersView } from "./views/UsersView";
 
 // One client for every screen: the shared refresh and the single move to the login page are per instance.
@@ -46,14 +47,10 @@ export function App() {
       return <LoadError message={unexpectedResponseMessage(404)} onReload={reload} />;
     case "ready":
       return (
-        <AppShell user={me.data} route={route} path={path}>
-          <div className="layout">
-            <div className="layout-screen">
-              <ErrorBoundary key={path}>
-                <Screen route={route} user={me.data} path={path} />
-              </ErrorBoundary>
-            </div>
-          </div>
+        <AppShell client={client} user={me.data} route={route} path={path}>
+          <ErrorBoundary key={path.split("?")[0]}>
+            <Screen route={route} user={me.data} path={path} />
+          </ErrorBoundary>
         </AppShell>
       );
   }
@@ -64,9 +61,13 @@ function Screen({ route, user, path }: { route: Route; user: User; path: string 
     case "home":
       return <HomeView client={client} />;
     case "sites":
-      return <SitesView client={client} />;
+      return <HomeView client={client} />;
     case "siteDetail":
-      return <SiteDetailView client={client} id={route.id} />;
+      return <SiteDetailView client={client} id={route.id} path={path} />;
+    case "siteData":
+      return <DataView client={client} id={route.id} />;
+    case "siteSettings":
+      return <SettingsView client={client} id={route.id} />;
     case "siteArticles":
       return <ArticlesView client={client} siteId={route.id} path={path} />;
     case "siteMemos":
