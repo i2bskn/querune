@@ -132,6 +132,38 @@ export type CreateArticleRequest = {
 // At least one of the items. null clears url and published_on.
 export type UpdateArticleRequest = Partial<CreateArticleRequest>;
 
+// POST /api/v1/sites/:id/articles/sitemap. sitemap_url defaults to <site url>/sitemap.xml; it must be on the origin
+// of the site.
+export type ReadSitemapRequest = { sitemap_url?: string | null };
+
+// A URL of the sitemap. lastmod is the date written in the sitemap (YYYY-MM-DD); registered is true when the site has
+// an article with this URL.
+export type SitemapUrl = { url: string; lastmod: string | null; registered: boolean };
+
+// The URLs of the site in the order of the sitemap, at most 5000 (truncated is true when more were found).
+// skipped_urls counts the URLs that are invalid or on another origin, skipped_sitemaps the child sitemaps that were
+// not read. remaining is the number of articles the site can still register.
+export type ReadSitemapResponse = {
+  sitemap_url: string;
+  urls: SitemapUrl[];
+  truncated: boolean;
+  skipped_urls: number;
+  skipped_sitemaps: number;
+  remaining: number;
+};
+
+// POST /api/v1/sites/:id/articles/import: 1 to 10 URLs of the site.
+export type ImportArticlesRequest = { urls: string[] };
+
+// url is the URL of the request; article.url is the URL after the redirects of the page.
+export type ImportArticleResult =
+  | { url: string; status: "created"; article: ArticleSummary }
+  | { url: string; status: "exists" }
+  | { url: string; status: "failed"; error: string };
+
+// In the order of the request, duplicates removed.
+export type ImportArticlesResponse = { results: ImportArticleResult[] };
+
 // A memo of a site: research, measurement changes, competitors, article ideas and so on. Times are UNIX time in
 // milliseconds.
 export type Memo = {

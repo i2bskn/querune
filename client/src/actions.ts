@@ -4,7 +4,12 @@ import type {
   CreateMemoRequest,
   CreateSiteRequest,
   CreateUserRequest,
+  ImportArticleResult,
+  ImportArticlesRequest,
+  ImportArticlesResponse,
   Memo,
+  ReadSitemapRequest,
+  ReadSitemapResponse,
   Site,
   SyncRequest,
   SyncResponse,
@@ -237,4 +242,55 @@ export async function updateMemo(client: ApiClient, memoId: string, input: Updat
 export async function deleteMemo(client: ApiClient, memoId: string): Promise<ResourceActionResult> {
   if (!isValidId(memoId)) return INVALID_MEMO_ID;
   return resourceActionResult(await send(() => client.api.v1.memos[":id"].$delete({ param: { id: memoId } })));
+}
+
+// A 5xx while reading a sitemap is most likely the CPU time limit of the Worker on a large sitemap.
+export const SITEMAP_SERVER_ERROR_MESSAGE =
+  "サイトマップを読み込めませんでした。サイトマップが大きい場合は、子サイトマップの URL を指定してください";
+
+export type ReadSitemapResult = { kind: "ok"; sitemap: ReadSitemapResponse } | { kind: "notFound" } | SendFailure;
+
+// Reads the sitemap of a site and returns its URLs. notFound means the site is gone; other errors, including
+// sitemap_unavailable and sitemap_unreadable (422), are shown with the server's message. Never rejects.
+export async function readSitemap(
+  client: ApiClient,
+  siteId: string,
+  input: ReadSitemapRequest,
+): Promise<ReadSitemapResult> {
+  if (!isValidId(siteId)) return INVALID_SITE_ID;
+  const sent = await send(() =>
+    client.api.v1.sites[":id"].articles.sitemap.$post({ param: { id: siteId }, json: input }),
+  );
+  if (sent.kind !== "response") return sent;
+  const { res } = sent;
+  if (res.ok) {
+    const body = await okJson(res as { status: number; json(): Promise<ReadSitemapResponse> });
+    return body.kind === "ok" ? { kind: "ok", sitemap: body.value } : body;
+  }
+  if (res.status === 404) return { kind: "notFound" };
+  if (res.status >= 500) return { kind: "error", message: SITEMAP_SERVER_ERROR_MESSAGE };
+  return { kind: "error", message: await responseErrorMessage(res) };
+}
+
+export type ImportArticlesResult = { kind: "ok"; results: ImportArticleResult[] } | { kind: "notFound" } | SendFailure;
+
+// Registers up to 10 URLs of the sitemap as articles. notFound means the site is gone. "unknown" and a 5xx may
+// still have registered some of them. Never rejects.
+export async function importArticles(
+  client: ApiClient,
+  siteId: string,
+  input: ImportArticlesRequest,
+): Promise<ImportArticlesResult> {
+  if (!isValidId(siteId)) return INVALID_SITE_ID;
+  const sent = await send(() =>
+    client.api.v1.sites[":id"].articles.import.$post({ param: { id: siteId }, json: input }),
+  );
+  if (sent.kind !== "response") return sent;
+  const { res } = sent;
+  if (res.ok) {
+    const body = await okJson(res as { status: number; json(): Promise<ImportArticlesResponse> });
+    return body.kind === "ok" ? { kind: "ok", results: body.value.results } : body;
+  }
+  if (res.status === 404) return { kind: "notFound" };
+  return { kind: "error", message: await responseErrorMessage(res) };
 }

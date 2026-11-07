@@ -253,6 +253,8 @@
 | --- | --- | --- |
 | `GET /api/v1/sites/:id/articles` | サイトの記事の一覧（`note`を含まない）。クエリ`tag`で1つのタグに完全一致する記事だけにできる | 200 `{ "articles": ArticleSummary[] }` |
 | `POST /api/v1/sites/:id/articles` | 記事の登録。本文は`{ "title", "url"?, "published_on"?, "tags"?, "note"? }` | 201 `Article` |
+| `POST /api/v1/sites/:id/articles/sitemap` | サイトマップを読み、記事の候補のURLを返す。本文は`{ "sitemap_url"? }` | 200 `ReadSitemapResponse` |
+| `POST /api/v1/sites/:id/articles/import` | 選んだURLのページを取得し、タイトルと公開日を読んで記事として登録する。本文は`{ "urls" }` | 200 `{ "results": ImportArticleResult[] }` |
 | `GET /api/v1/articles/:id` | 記事1件 | 200 `Article` |
 | `PATCH /api/v1/articles/:id` | 記事の変更。本文は`title`、`url`、`published_on`、`tags`、`note`のうち変える項目だけ | 200 `Article` |
 | `DELETE /api/v1/articles/:id` | 記事の削除。メモは残り、その記事との関連付けだけを外す | 204 |
@@ -301,6 +303,45 @@
 - `ArticleSummary`は`Article`から`note`を除いたもの、`MemoSummary`は`Memo`から`content`を除き、`articles`を`{ "id", "title" }`にしたものです。
 - メモの`articles`はタイトルの昇順、同じタイトルは`id`の昇順です。
 
+### サイトマップからの取り込み
+
+サイトマップに載っているURLを、記事の台帳へまとめて登録します。管理画面では記事の画面の「サイトマップから取り込む」から使います。
+
+`POST /api/v1/sites/:id/articles/sitemap`はサイトマップを読みます。
+
+- `sitemap_url`を省略するか`null`・空文字にすると、`<サイトのURL>/sitemap.xml`を読みます。指定するときはサイトと同じoriginのURLにします。
+- `urlset`ならその`<url>`を読みます。`sitemapindex`なら先頭から10本までの子サイトマップを順に読み、11本目以降・別のoriginの子・取得に失敗した子・`urlset`でない子は読まずに`skipped_sitemaps`に数えます。
+- gzipで圧縮したサイトマップ（`.xml.gz`）も読めます。読むのはUTF-8だけで、子を含めた展開後の合計は5 MBまでです。
+- URLはフラグメントを除いて正規化し、サイトマップに書かれた順に返します。重複は最初の1つだけを残します。不正なURLと別のoriginのURLは除き、`skipped_urls`に数えます。5,000件を超えた分は捨てて`truncated`を`true`にします。
+- `lastmod`はサイトマップに書かれた日付（`YYYY-MM-DD`）です。時差は変換しません。
+
+```json
+{
+  "sitemap_url": "https://example.com/sitemap.xml",
+  "urls": [{ "url": "https://example.com/posts/a", "lastmod": "2026-10-01", "registered": false }],
+  "truncated": false,
+  "skipped_urls": 0,
+  "skipped_sitemaps": 0,
+  "remaining": 997
+}
+```
+
+- `registered`は、同じ`url`の記事が登録済みなら`true`です。
+- `remaining`は、あと登録できる記事の件数です（URLのない記事も数えます）。
+
+`POST /api/v1/sites/:id/articles/import`は、`urls`に指定したページ（1〜10件、サイトと同じorigin）を取得して記事を登録します。
+
+- ページは同時に5本まで取得し、先頭256 KBだけを読みます。同じoriginの中のリダイレクトは2回まで追い、記事の`url`にはリダイレクト後のURLを使います。
+- タイトルは`og:title`・`<title>`の順に読みます。どちらもなければURLのパスの最後の区切りを使い、それもなければホスト名にします。200文字を超える分は切ります。
+- タイトルの後ろに付いたサイト名は外します。最後の`|`（`｜`）の後ろが40文字以内ならその部分を外し、` - `・` – `・` — `・` · `の後ろは`og:site_name`で始まる場合だけ外します。
+- 公開日は`article:published_time`・JSON-LDの`datePublished`・`itemprop="datePublished"`の`<meta>`と`<time>`の順に読みます。サイトマップの`lastmod`は使いません。
+- タグは空、備考は空文字で登録します。登録済みの記事は変更しません。
+- `results`はリクエストの順（重複を除いた後）で、`status`は`created`（`article`に`ArticleSummary`）・`exists`（同じURLの記事が登録済み）・`failed`（`error`に理由）のどれかです。
+- ページの取得に失敗したURL（HTTPのエラー・応答なし・HTMLでない・UTF-8以外の文字コード・サイトの外へのリダイレクト）は`failed`になり、ほかのURLは続けて登録します。
+- 記事の上限に達したら、そのURLと以降の未登録のURLは`failed`になります。
+
+Cloudflare Workersの無料プランでは、大きなサイトマップを読むとCPU時間の上限で失敗することがあります。その場合は子サイトマップのURLを指定してください。
+
 ### 一覧の並びと絞り込み
 
 - 記事の一覧は、公開日のない記事が先、続いて`published_on`の降順、同じ日は`id`の降順です。
@@ -336,10 +377,14 @@
 | 400 | `invalid_title`・`invalid_url`・`invalid_date`・`invalid_tags`・`invalid_note`・`invalid_content` | その項目が規則に合わない |
 | 400 | `invalid_articles` | `article_ids`に形式の正しくないID、存在しない記事、別のサイトの記事がある、または6件以上ある |
 | 400 | `invalid_query` | 一覧のクエリが正しくない |
+| 400 | `invalid_sitemap_url` | `sitemap_url`が正しくない、またはサイトと同じoriginでない |
+| 400 | `invalid_urls` | `urls`が1〜10件の文字列の配列でない、または不正なURLや別のoriginのURLがある |
 | 401 | `unauthorized` | ログインしていない |
 | 404 | `not_found` | サイト・記事・メモが見つからない、またはIDの形式が正しくない |
 | 409 | `url_conflict` | 同じサイトに同じ`url`の記事がある（登録・変更とも） |
 | 409 | `limit_exceeded` | 記事かメモが上限の件数ある状態での登録 |
+| 422 | `sitemap_unavailable` | サイトマップを取得できない（HTTPのエラー・応答なし・サイトの外へのリダイレクト・5 MB超過） |
+| 422 | `sitemap_unreadable` | サイトマップとして読めない（`urlset`でも`sitemapindex`でもない） |
 
 ## MCP
 

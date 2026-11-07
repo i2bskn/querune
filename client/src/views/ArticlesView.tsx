@@ -9,6 +9,7 @@ import { type ArticleFormValues, EMPTY_ARTICLE_FORM, TEXT_MAX, TITLE_MAX, articl
 import { navigate, searchParams } from "../router";
 import { setCurrentSite } from "../siteContext";
 import { ViewStatus, useDocumentTitle, useFlashNotice, viewTitle } from "./common";
+import { SitemapImport } from "./SitemapImport";
 import { UNKNOWN_RESULT_MESSAGE } from "./SitesView";
 
 // A create request that got no response may have been saved, so the list is checked before sending it again.
@@ -22,6 +23,7 @@ export function ArticlesView({ client, siteId, path }: { client: ApiClient; site
   const [state, reload] = useView(() => loadArticlesView(client, siteId, tag), `articles:${siteId}:${tag ?? ""}`);
   const [notice, setNotice] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [importing, setImporting] = useState(false);
   useFlashNotice(setNotice);
   useDocumentTitle(viewTitle(state, (data) => `記事 - ${data.site.name}`));
   useEffect(() => {
@@ -42,11 +44,16 @@ export function ArticlesView({ client, siteId, path }: { client: ApiClient; site
           <h1>記事</h1>
           <p className="lead">記事の台帳です。URL を登録した記事は開くと検索とセッションの推移を見られます。</p>
         </div>
-        {!adding && (
-          <button type="button" className="button-primary" onClick={() => setAdding(true)}>
-            <PlusIcon />
-            記事を追加
-          </button>
+        {!adding && !importing && (
+          <div className="page-head-actions">
+            <button type="button" onClick={() => setImporting(true)}>
+              サイトマップから取り込む
+            </button>
+            <button type="button" className="button-primary" onClick={() => setAdding(true)}>
+              <PlusIcon />
+              記事を追加
+            </button>
+          </div>
         )}
       </header>
       {notice !== null && (
@@ -55,19 +62,34 @@ export function ArticlesView({ client, siteId, path }: { client: ApiClient; site
         </p>
       )}
       {adding && <CreateArticleForm client={client} site={site} onClose={() => setAdding(false)} />}
-      <TagFilter
-        tags={tags}
-        value={tag}
-        onChange={(next) =>
-          navigate(next === null ? base : `${base}?tag=${encodeURIComponent(next)}`, { keepScroll: true })
-        }
-      />
-      {articles.length === 0 ? (
-        <p className="empty-note">
-          {tag === null ? "記事はまだ登録されていません。" : "このタグの記事はありません。"}
-        </p>
+      {importing ? (
+        // The panel takes the place of the list, so that no change of tag reloads the view (and unmounts the panel)
+        // while it is open. The list is reloaded after closing if anything was sent.
+        <SitemapImport
+          client={client}
+          site={site}
+          onClose={(sent) => {
+            setImporting(false);
+            if (sent) reload();
+          }}
+        />
       ) : (
-        <ArticleList articles={articles} site={site} />
+        <>
+          <TagFilter
+            tags={tags}
+            value={tag}
+            onChange={(next) =>
+              navigate(next === null ? base : `${base}?tag=${encodeURIComponent(next)}`, { keepScroll: true })
+            }
+          />
+          {articles.length === 0 ? (
+            <p className="empty-note">
+              {tag === null ? "記事はまだ登録されていません。" : "このタグの記事はありません。"}
+            </p>
+          ) : (
+            <ArticleList articles={articles} site={site} />
+          )}
+        </>
       )}
     </main>
   );

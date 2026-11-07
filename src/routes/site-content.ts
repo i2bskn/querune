@@ -2,16 +2,24 @@
 // that its requireUser runs once. The items themselves are served by routes/articles.ts and routes/memos.ts.
 import type { Context, MiddlewareHandler } from "hono";
 import { createFactory } from "hono/factory";
+import { eq } from "drizzle-orm";
 import type {
   ArticleList,
   ArticleListQuery,
   CreateArticleRequest,
   CreateMemoRequest,
+  ImportArticleResult,
+  ImportArticlesRequest,
+  ImportArticlesResponse,
   MemoList,
   MemoListQuery,
+  ReadSitemapRequest,
+  ReadSitemapResponse,
 } from "../api/types";
-import { apiError, clock, jsonBody } from "@i2bskn/workers-app-core";
+import { apiError, clock, jsonBody, type Db } from "@i2bskn/workers-app-core";
+import { sites, type SiteRow } from "../db/schema";
 import type { AppEnv } from "../env";
+import { SITE_ID_PATTERN } from "../ids";
 import { createArticle, listArticles } from "../records/articles";
 import { siteNotFound, type Failure } from "../records/common";
 import { createMemo, listMemos, listTags } from "../records/memos";
@@ -21,12 +29,26 @@ import {
   checkMemoFilters,
   checkQueryNumber,
   checkTagFilter,
+  MAX_ARTICLES_PER_SITE,
   MAX_MEMOS_PER_SITE,
+  normalizeArticleUrl,
+  unknownFieldError,
   type ArticleInput,
   type Check,
   type MemoFilters,
   type MemoInput,
 } from "../records/validate";
+import {
+  IMPORT_CONCURRENCY,
+  IMPORT_DEADLINE_MS,
+  IMPORT_FETCH_BUDGET,
+  importMessages,
+  MAX_IMPORT_URLS,
+  readPage,
+  readSitemap,
+  type FetchBudget,
+  type PageResult,
+} from "../sitemap";
 
 const factory = createFactory<AppEnv>();
 
@@ -120,4 +142,175 @@ export const listSiteTags = factory.createHandlers(async (c) => {
   const result = await listTags(c.get("db").$client, siteIdOf(c));
   if (!result) return apiError(c, 404, "not_found", siteNotFound);
   return c.json(result, 200);
+});
+
+// ---------- Importing articles from the sitemap ----------
+
+// The site of the path, or undefined when it is missing or the ID is malformed. Read here rather than imported from
+// routes/sites.ts, which imports this module.
+function findSiteOf(c: Context<AppEnv>): Promise<SiteRow | undefined> {
+  const id = siteIdOf(c);
+  if (!SITE_ID_PATTERN.test(id)) return Promise.resolve(undefined);
+  return c.get("db").select().from(sites).where(eq(sites.id, id)).get();
+}
+
+function originOf(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+// The URL of every article of the site (null for the articles without one): the count gives the room left and the
+// URLs tell the registered ones. At most MAX_ARTICLES_PER_SITE rows, so one query and a Set.
+async function siteArticleUrls(db: Db, siteId: string): Promise<{ count: number; urls: Set<string> }> {
+  const { results } = await db.$client
+    .prepare("SELECT url FROM articles WHERE site_id = ?")
+    .bind(siteId)
+    .all<{ url: string | null }>();
+  const urls = new Set<string>();
+  for (const row of results) if (row.url !== null) urls.add(row.url);
+  return { count: results.length, urls };
+}
+
+const SITEMAP_FIELDS = ["sitemap_url"];
+const invalidSitemapUrlFormat = "サイトマップの URL は http または https で始まる正しい形式にしてください";
+
+function invalidSitemapUrlMessage(origin: string): string {
+  return `サイトマップの URL は、サイトと同じ ${origin} で始まる URL にしてください`;
+}
+
+// null: the default sitemap of the site.
+const sitemapBody = recordsJsonBody<ReadSitemapRequest, { sitemapUrl: string | null }>((body) => {
+  const unknown = Object.keys(body).find((key) => !SITEMAP_FIELDS.includes(key));
+  if (unknown !== undefined) return unknownFieldError(unknown);
+  const value = body.sitemap_url;
+  if (value === undefined || value === null) return { ok: true, value: { sitemapUrl: null } };
+  const url = normalizeArticleUrl(value);
+  if (!url.ok) return { ok: false, code: "invalid_sitemap_url", message: invalidSitemapUrlFormat };
+  return { ok: true, value: { sitemapUrl: url.value } };
+});
+
+export const readSiteSitemap = factory.createHandlers(sitemapBody, async (c) => {
+  const { sitemapUrl: requested } = c.req.valid("json");
+  const site = await findSiteOf(c);
+  if (!site) return apiError(c, 404, "not_found", siteNotFound);
+  const sitemapUrl = requested ?? `${site.url}/sitemap.xml`;
+  if (originOf(sitemapUrl) !== site.url) {
+    return apiError(c, 400, "invalid_sitemap_url", invalidSitemapUrlMessage(site.url));
+  }
+  const result = await readSitemap(sitemapUrl, site.url);
+  if (!result.ok) {
+    return apiError(c, 422, result.error === "unavailable" ? "sitemap_unavailable" : "sitemap_unreadable", result.message);
+  }
+  const existing = await siteArticleUrls(c.get("db"), site.id);
+  const body: ReadSitemapResponse = {
+    sitemap_url: sitemapUrl,
+    urls: result.urls.map((entry) => ({ ...entry, registered: existing.urls.has(entry.url) })),
+    truncated: result.truncated,
+    skipped_urls: result.skippedUrls,
+    skipped_sitemaps: result.skippedSitemaps,
+    remaining: Math.max(0, MAX_ARTICLES_PER_SITE - existing.count),
+  };
+  return c.json(body, 200);
+});
+
+const IMPORT_FIELDS = ["urls"];
+const invalidUrlsMessage = `取り込む URL は 1〜${MAX_IMPORT_URLS} 件の、サイトと同じ origin の URL にしてください`;
+
+function invalidUrls(): { ok: false; code: string; message: string } {
+  return { ok: false, code: "invalid_urls", message: invalidUrlsMessage };
+}
+
+// 1 to 10 URLs, normalized; duplicates after normalization are removed keeping the first. Whether they are on the
+// origin of the site is checked once the site is read.
+const importBody = recordsJsonBody<ImportArticlesRequest, { urls: string[] }>((body) => {
+  const unknown = Object.keys(body).find((key) => !IMPORT_FIELDS.includes(key));
+  if (unknown !== undefined) return unknownFieldError(unknown);
+  const value = body.urls;
+  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_IMPORT_URLS) return invalidUrls();
+  const urls: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") return invalidUrls();
+    const url = normalizeArticleUrl(item);
+    if (!url.ok || url.value === null) return invalidUrls();
+    if (!urls.includes(url.value)) urls.push(url.value);
+  }
+  return { ok: true, value: { urls } };
+});
+
+// Runs task on every item with at most limit at a time. The results are in the order of the items.
+async function mapConcurrently<T, R>(items: T[], limit: number, task: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await task(items[index] as T);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+export const importSiteArticles = factory.createHandlers(importBody, async (c) => {
+  const { urls } = c.req.valid("json");
+  const db = c.get("db");
+  const site = await findSiteOf(c);
+  if (!site) return apiError(c, 404, "not_found", siteNotFound);
+  if (urls.some((url) => originOf(url) !== site.url)) return apiError(c, 400, "invalid_urls", invalidUrlsMessage);
+  const existing = await siteArticleUrls(db, site.id);
+  // Every page is fetched before any article is created, so that the articles are created in the order of the
+  // request and the article limit cuts it at one place.
+  const budget: FetchBudget = { remaining: IMPORT_FETCH_BUDGET };
+  const deadline = Date.now() + IMPORT_DEADLINE_MS;
+  const pages = await mapConcurrently(urls, IMPORT_CONCURRENCY, async (url): Promise<PageResult | "exists"> => {
+    if (existing.urls.has(url)) return "exists";
+    if (Date.now() >= deadline) return { ok: false, error: importMessages.budget };
+    return readPage(url, site.url, budget);
+  });
+  const now = clock.now();
+  const results: ImportArticleResult[] = [];
+  let limitReached = false;
+  for (const [i, url] of urls.entries()) {
+    const page = pages[i] ?? { ok: false, error: importMessages.budget };
+    // The page may also redirect to the URL of a registered article.
+    if (page === "exists" || (page.ok && existing.urls.has(page.url))) {
+      results.push({ url, status: "exists" });
+      continue;
+    }
+    // Once the limit is reached, every URL left is reported with it, even those whose page failed.
+    if (limitReached) {
+      results.push({ url, status: "failed", error: importMessages.limit });
+      continue;
+    }
+    if (!page.ok) {
+      results.push({ url, status: "failed", error: page.error });
+      continue;
+    }
+    const created = await createArticle(
+      db,
+      site.id,
+      { title: page.title, url: page.url, publishedOn: page.publishedOn, tags: [], note: "" },
+      now,
+    );
+    if (created.ok) {
+      const { note: _note, ...article } = created.value;
+      results.push({ url, status: "created", article });
+      existing.urls.add(page.url);
+      continue;
+    }
+    if (created.status === 404) return failureResponse(c, created);
+    if (created.code === "url_conflict") {
+      results.push({ url, status: "exists" });
+    } else if (created.code === "limit_exceeded") {
+      limitReached = true;
+      results.push({ url, status: "failed", error: importMessages.limit });
+    } else {
+      results.push({ url, status: "failed", error: created.message });
+    }
+  }
+  const body: ImportArticlesResponse = { results };
+  return c.json(body, 200);
 });

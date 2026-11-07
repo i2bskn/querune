@@ -30,7 +30,15 @@ import {
 } from "../sync/enqueue";
 import { getSyncStatus } from "../sync/status";
 import { normalizeDisplayName, unknownField } from "./api";
-import { createSiteArticle, createSiteMemo, listSiteArticles, listSiteMemos, listSiteTags } from "./site-content";
+import {
+  createSiteArticle,
+  createSiteMemo,
+  importSiteArticles,
+  listSiteArticles,
+  listSiteMemos,
+  listSiteTags,
+  readSiteSitemap,
+} from "./site-content";
 
 export const MAX_SITES = 100;
 const SITE_NAME_MAX_LENGTH = 100;
@@ -435,6 +443,8 @@ const sitesApi = new Hono<AppEnv>()
   })
   .get("/:id/articles", ...listSiteArticles)
   .post("/:id/articles", ...createSiteArticle)
+  .post("/:id/articles/sitemap", ...readSiteSitemap)
+  .post("/:id/articles/import", ...importSiteArticles)
   .get("/:id/memos", ...listSiteMemos)
   .post("/:id/memos", ...createSiteMemo)
   .get("/:id/tags", ...listSiteTags);

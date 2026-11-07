@@ -804,10 +804,17 @@ textarea:disabled {
   flex: 1 1 24rem;
 }
 
+.page-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 @media (width >= 720px) {
   .page-head > button,
   .page-head > .segmented,
-  .page-head > .memo-actions {
+  .page-head > .memo-actions,
+  .page-head > .page-head-actions {
     margin-top: 1.5rem;
   }
 }
@@ -2375,6 +2382,117 @@ a.tag:hover {
 
 /* ---------- Articles ---------- */
 
+/* Importing articles from the sitemap. The panel takes the place of the list. */
+
+.sitemap-import {
+  margin-bottom: 1.5rem;
+  box-shadow: var(--shadow);
+}
+
+.sitemap-summary {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.sitemap-summary p {
+  margin: 0;
+}
+
+.sitemap-summary .hint {
+  margin-top: 0.25rem;
+  font-weight: 500;
+}
+
+.sitemap-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem 1.25rem;
+}
+
+.sitemap-tools .field {
+  flex: 1 1 16rem;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.check input,
+.sitemap-row input {
+  flex: none;
+  width: 1.0625rem;
+  height: 1.0625rem;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.sitemap-list {
+  max-height: 28rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.sitemap-list li + li {
+  border-top: 1px solid var(--line);
+}
+
+.sitemap-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.5rem 0.875rem;
+  cursor: pointer;
+}
+
+.sitemap-row:hover {
+  background: var(--surface-2);
+}
+
+.sitemap-row:has(input:disabled) {
+  cursor: default;
+  color: var(--ink-3);
+}
+
+.sitemap-url {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.sitemap-date {
+  flex: none;
+  font-family: var(--font-num);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+}
+
+.sitemap-progress {
+  width: 100%;
+  height: 0.5rem;
+  accent-color: var(--accent);
+}
+
 .article-list {
   margin: 1rem 0 0;
   padding: 0;
@@ -3333,5 +3451,17 @@ a.tag:hover {
 
   .memo-actions .button-danger-outline {
     margin-left: auto;
+  }
+
+  .sitemap-row {
+    min-height: 2.75rem;
+  }
+
+  .page-head-actions {
+    width: 100%;
+  }
+
+  .page-head-actions > button {
+    flex: 1 1 auto;
   }
 }
