@@ -1,36 +1,35 @@
 import { type FormEvent, useState } from "react";
-import type { ArticleSummary, SiteRecord } from "../../../src/api/types";
-import { deleteRecord, updateRecord } from "../actions";
+import type { ArticleSummary, Memo } from "../../../src/api/types";
+import { deleteMemo, updateMemo } from "../actions";
 import { setFlash } from "../flash";
 import { formatDateTime } from "../format";
 import { Link } from "../Link";
-import { type ApiClient, loadRecordDetail, useView } from "../load";
-import { KIND_LABELS, STATUS_LABELS, periodText, recordFormValues, recordRequest } from "../records";
+import { type ApiClient, loadMemoDetail, useView } from "../load";
+import { memoFormValues, memoRequest } from "../records";
 import { navigate } from "../router";
 import { SiteBreadcrumb, Tags, handleItemResult } from "./ArticlesView";
 import { ViewStatus, useDocumentTitle, viewTitle } from "./common";
-import { RecordFields } from "./RecordsView";
+import { MemoFields } from "./MemosView";
 import { UNKNOWN_RESULT_MESSAGE } from "./SitesView";
 
-const GONE_MESSAGE = "記録が見つかりません。削除された可能性があります";
+const GONE_MESSAGE = "メモが見つかりません。削除された可能性があります";
 
-// One record: its details, the edit form and the deletion.
-export function RecordDetailView({ client, id }: { client: ApiClient; id: string }) {
-  const [state, reload] = useView(() => loadRecordDetail(client, id), `record:${id}`);
+// One memo: its details, the edit form and the deletion.
+export function MemoDetailView({ client, id }: { client: ApiClient; id: string }) {
+  const [state, reload] = useView(() => loadMemoDetail(client, id), `memo:${id}`);
   const [notice, setNotice] = useState<string | null>(null);
-  useDocumentTitle(viewTitle(state, (data) => data.record.title));
+  useDocumentTitle(viewTitle(state, (data) => data.memo.title));
 
   if (state.kind !== "ready") {
     return <ViewStatus state={state} notFoundMessage={GONE_MESSAGE} onReload={reload} />;
   }
-  const { record, site, articles } = state.data;
-  const period = periodText(record.period_start, record.period_end);
+  const { memo, site, articles } = state.data;
 
   return (
     <main className="main">
-      <SiteBreadcrumb site={site} section="records" />
+      <SiteBreadcrumb site={site} section="memos" />
       <header className="page-head">
-        <h1>{record.title}</h1>
+        <h1>{memo.title}</h1>
       </header>
       {notice !== null && (
         <p className="notice" role="status">
@@ -38,23 +37,17 @@ export function RecordDetailView({ client, id }: { client: ApiClient; id: string
         </p>
       )}
       <dl className="details">
-        <dt>種類</dt>
-        <dd>{KIND_LABELS[record.kind]}</dd>
-        <dt>状態</dt>
-        <dd>{STATUS_LABELS[record.status]}</dd>
-        <dt>日付</dt>
-        <dd>{record.date ?? "未設定"}</dd>
-        <dt>期間</dt>
-        <dd>{period ?? "未設定"}</dd>
+        <dt>本文</dt>
+        <dd>{memo.content === "" ? "なし" : <span className="text-body">{memo.content}</span>}</dd>
         <dt>タグ</dt>
-        <dd>{record.tags.length === 0 ? "なし" : <Tags tags={record.tags} />}</dd>
-        <dt>記事</dt>
+        <dd>{memo.tags.length === 0 ? "なし" : <Tags tags={memo.tags} />}</dd>
+        <dt>関連する記事</dt>
         <dd>
-          {record.articles.length === 0 ? (
+          {memo.articles.length === 0 ? (
             "なし"
           ) : (
             <ul className="plain-list">
-              {record.articles.map((article) => (
+              {memo.articles.map((article) => (
                 <li key={article.id}>
                   <Link to={`/articles/${article.id}`}>{article.title}</Link>
                 </li>
@@ -62,52 +55,50 @@ export function RecordDetailView({ client, id }: { client: ApiClient; id: string
             </ul>
           )}
         </dd>
-        <dt>内容</dt>
-        <dd>{record.content === "" ? "なし" : <span className="text-body">{record.content}</span>}</dd>
       </dl>
       <p className="hint">
-        登録 <time dateTime={new Date(record.created_at).toISOString()}>{formatDateTime(record.created_at)}</time>・更新{" "}
-        <time dateTime={new Date(record.updated_at).toISOString()}>{formatDateTime(record.updated_at)}</time>
+        登録 <time dateTime={new Date(memo.created_at).toISOString()}>{formatDateTime(memo.created_at)}</time>・更新{" "}
+        <time dateTime={new Date(memo.updated_at).toISOString()}>{formatDateTime(memo.updated_at)}</time>
       </p>
-      <EditRecordForm
+      <EditMemoForm
         // Keyed by the saved values, so that the form shows them again after a reload.
-        key={record.updated_at}
+        key={memo.updated_at}
         client={client}
-        record={record}
+        memo={memo}
         articles={articles}
         onUpdated={() => {
-          setNotice("記録を更新しました");
+          setNotice("メモを更新しました");
           reload();
         }}
         onGone={reload}
       />
-      <DeleteRecord client={client} record={record} onGone={reload} />
+      <DeleteMemo client={client} memo={memo} onGone={reload} />
     </main>
   );
 }
 
-function EditRecordForm({
+function EditMemoForm({
   client,
-  record,
+  memo,
   articles,
   onUpdated,
   onGone,
 }: {
   client: ApiClient;
-  record: SiteRecord;
+  memo: Memo;
   articles: ArticleSummary[];
   onUpdated: () => void;
   onGone: () => void;
 }) {
   const [sending, setSending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const [values, setValues] = useState(() => recordFormValues(record));
+  const [values, setValues] = useState(() => memoFormValues(memo));
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSending(true);
     setFailure(null);
-    const result = await updateRecord(client, record.id, recordRequest(values));
+    const result = await updateMemo(client, memo.id, memoRequest(values));
     if (handleItemResult(result, setSending, setFailure)) {
       onUpdated();
     } else if (result.kind === "notFound") {
@@ -118,8 +109,8 @@ function EditRecordForm({
   return (
     <>
       <h2>編集</h2>
-      <form className="folder-form" aria-label="記録の編集" onSubmit={(event) => void onSubmit(event)}>
-        <RecordFields values={values} onChange={setValues} articles={articles} disabled={sending} />
+      <form className="folder-form" aria-label="メモの編集" onSubmit={(event) => void onSubmit(event)}>
+        <MemoFields values={values} onChange={setValues} articles={articles} disabled={sending} />
         <div className="folder-form-actions">
           <button type="submit" disabled={sending}>
             保存
@@ -132,7 +123,7 @@ function EditRecordForm({
 }
 
 // The deletion, confirmed with a second button.
-function DeleteRecord({ client, record, onGone }: { client: ApiClient; record: SiteRecord; onGone: () => void }) {
+function DeleteMemo({ client, memo, onGone }: { client: ApiClient; memo: Memo; onGone: () => void }) {
   const [open, setOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
@@ -140,11 +131,11 @@ function DeleteRecord({ client, record, onGone }: { client: ApiClient; record: S
   async function onDelete() {
     setSending(true);
     setFailure(null);
-    const result = await deleteRecord(client, record.id);
+    const result = await deleteMemo(client, memo.id);
     switch (result.kind) {
       case "ok":
-        setFlash("記録を削除しました");
-        navigate(`/sites/${record.site_id}/records`);
+        setFlash("メモを削除しました");
+        navigate(`/sites/${memo.site_id}/memos`);
         return;
       case "notFound":
         setSending(false);
@@ -176,12 +167,12 @@ function DeleteRecord({ client, record, onGone }: { client: ApiClient; record: S
               setFailure(null);
             }}
           >
-            記録を削除
+            メモを削除
           </button>
         </div>
       ) : (
-        <div className="folder-form" role="group" aria-label="記録を削除">
-          <p>{record.title} を削除します。元に戻せません。</p>
+        <div className="folder-form" role="group" aria-label="メモを削除">
+          <p>{memo.title} を削除します。元に戻せません。</p>
           <div className="folder-form-actions">
             <button type="button" className="button-danger" onClick={() => void onDelete()} disabled={sending}>
               削除する

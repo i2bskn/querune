@@ -26,13 +26,7 @@ import {
 } from "../sync/enqueue";
 import { getSyncStatus } from "../sync/status";
 import { normalizeDisplayName, unknownField } from "./api";
-import {
-  createSiteArticle,
-  createSiteRecord,
-  listSiteArticles,
-  listSiteRecords,
-  listSiteTags,
-} from "./site-content";
+import { createSiteArticle, createSiteMemo, listSiteArticles, listSiteMemos, listSiteTags } from "./site-content";
 
 export const MAX_SITES = 100;
 const SITE_NAME_MAX_LENGTH = 100;
@@ -318,7 +312,7 @@ const sitesApi = new Hono<AppEnv>()
     const purgeIds = DATASETS.map(() => newUlid(now));
     // The purges are inserted before the site is deleted, and only while it exists, so that a concurrent deletion
     // leaves no purge behind. The imported rows are deleted later by the purges: deleting them here could exceed the
-    // D1 limits. The articles, records and their links are deleted with the site by ON DELETE CASCADE.
+    // D1 limits. The articles, memos and their links are deleted with the site by ON DELETE CASCADE.
     const results = await d1.batch([
       ...DATASETS.map((dataset, i) =>
         d1
@@ -398,8 +392,8 @@ const sitesApi = new Hono<AppEnv>()
   })
   .get("/:id/articles", ...listSiteArticles)
   .post("/:id/articles", ...createSiteArticle)
-  .get("/:id/records", ...listSiteRecords)
-  .post("/:id/records", ...createSiteRecord)
+  .get("/:id/memos", ...listSiteMemos)
+  .post("/:id/memos", ...createSiteMemo)
   .get("/:id/tags", ...listSiteTags);
 
 export default sitesApi;

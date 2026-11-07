@@ -7,7 +7,7 @@ export type Outcome<T> = { ok: true; value: T } | Failure;
 
 export const siteNotFound = "サイトが見つかりません";
 export const articleNotFound = "記事が見つかりません";
-export const recordNotFound = "記録が見つかりません";
+export const memoNotFound = "メモが見つかりません";
 
 export function failure(status: Failure["status"], code: string, message: string): Failure {
   return { ok: false, status, code, message };

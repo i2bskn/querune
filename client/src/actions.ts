@@ -1,15 +1,15 @@
 import type {
   Article,
   CreateArticleRequest,
-  CreateRecordRequest,
+  CreateMemoRequest,
   CreateSiteRequest,
   CreateUserRequest,
+  Memo,
   Site,
   SyncRequest,
   SyncResponse,
-  SiteRecord,
   UpdateArticleRequest,
-  UpdateRecordRequest,
+  UpdateMemoRequest,
   UpdateSiteRequest,
   User,
 } from "../../src/api/types";
@@ -175,7 +175,7 @@ export async function requestSync(client: ApiClient, siteId: string, input: Sync
   return { kind: "error", message: await responseErrorMessage(res) };
 }
 
-// The outcome of creating or changing an article or a record.
+// The outcome of creating or changing an article or a memo.
 export type ItemResult<T> = { kind: "ok"; item: T } | { kind: "notFound" } | SendFailure;
 
 async function itemResult<T, R extends { ok: boolean; status: number; json(): Promise<unknown> }>(
@@ -192,7 +192,7 @@ async function itemResult<T, R extends { ok: boolean; status: number; json(): Pr
 }
 
 const INVALID_ARTICLE_ID = { kind: "error", message: "記事が見つかりません" } as const;
-const INVALID_RECORD_ID = { kind: "error", message: "記録が見つかりません" } as const;
+const INVALID_MEMO_ID = { kind: "error", message: "メモが見つかりません" } as const;
 
 // Registers an article in a site. notFound means the site is gone; errors, including url_conflict and
 // limit_exceeded (409), are shown with the server's message. Never rejects.
@@ -215,34 +215,26 @@ export async function updateArticle(
   return itemResult(await send(() => client.api.v1.articles[":id"].$patch({ param: { id: articleId }, json: input })));
 }
 
-// Deletes an article. Its records stay. Never rejects.
+// Deletes an article. Its memos stay. Never rejects.
 export async function deleteArticle(client: ApiClient, articleId: string): Promise<ResourceActionResult> {
   if (!isValidId(articleId)) return INVALID_ARTICLE_ID;
   return resourceActionResult(await send(() => client.api.v1.articles[":id"].$delete({ param: { id: articleId } })));
 }
 
-// Registers a record in a site. notFound means the site is gone. Never rejects.
-export async function createRecord(
-  client: ApiClient,
-  siteId: string,
-  input: CreateRecordRequest,
-): Promise<ItemResult<SiteRecord>> {
+// Registers a memo in a site. notFound means the site is gone. Never rejects.
+export async function createMemo(client: ApiClient, siteId: string, input: CreateMemoRequest): Promise<ItemResult<Memo>> {
   if (!isValidId(siteId)) return INVALID_SITE_ID;
-  return itemResult(await send(() => client.api.v1.sites[":id"].records.$post({ param: { id: siteId }, json: input })));
+  return itemResult(await send(() => client.api.v1.sites[":id"].memos.$post({ param: { id: siteId }, json: input })));
 }
 
-// Changes the given items of a record. Never rejects.
-export async function updateRecord(
-  client: ApiClient,
-  recordId: string,
-  input: UpdateRecordRequest,
-): Promise<ItemResult<SiteRecord>> {
-  if (!isValidId(recordId)) return INVALID_RECORD_ID;
-  return itemResult(await send(() => client.api.v1.records[":id"].$patch({ param: { id: recordId }, json: input })));
+// Changes the given items of a memo. Never rejects.
+export async function updateMemo(client: ApiClient, memoId: string, input: UpdateMemoRequest): Promise<ItemResult<Memo>> {
+  if (!isValidId(memoId)) return INVALID_MEMO_ID;
+  return itemResult(await send(() => client.api.v1.memos[":id"].$patch({ param: { id: memoId }, json: input })));
 }
 
-// Deletes a record. Never rejects.
-export async function deleteRecord(client: ApiClient, recordId: string): Promise<ResourceActionResult> {
-  if (!isValidId(recordId)) return INVALID_RECORD_ID;
-  return resourceActionResult(await send(() => client.api.v1.records[":id"].$delete({ param: { id: recordId } })));
+// Deletes a memo. Never rejects.
+export async function deleteMemo(client: ApiClient, memoId: string): Promise<ResourceActionResult> {
+  if (!isValidId(memoId)) return INVALID_MEMO_ID;
+  return resourceActionResult(await send(() => client.api.v1.memos[":id"].$delete({ param: { id: memoId } })));
 }

@@ -192,7 +192,7 @@ export async function updateArticle(
   return { ok: true, value: { article, previous } };
 }
 
-// Deletes an article; its links to records are removed by the cascade and the records stay. false when missing.
+// Deletes an article; its links to memos are removed by the cascade and the memos stay. false when missing.
 export async function deleteArticle(db: Db, id: string): Promise<boolean> {
   if (!ARTICLE_ID_PATTERN.test(id)) return false;
   const result = await db.delete(articles).where(eq(articles.id, id)).run();

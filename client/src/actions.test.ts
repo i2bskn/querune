@@ -1,20 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Article, Site, SiteRecord, User } from "../../src/api/types";
+import type { Article, Memo, Site, User } from "../../src/api/types";
 import {
   changeUserRole,
   createArticle,
-  createRecord,
+  createMemo,
   createSite,
   createUser,
   deleteArticle,
-  deleteRecord,
+  deleteMemo,
   deleteSite,
   deleteUser,
   resetUserPassword,
   requestSync,
   revokeUserSessions,
   updateArticle,
-  updateRecord,
+  updateMemo,
   updateSite,
 } from "./actions";
 import { createApiClient, createApiFetch } from "./api";
@@ -348,15 +348,10 @@ const ARTICLE: Article = {
   created_at: 1,
   updated_at: 1,
 };
-const RECORD: SiteRecord = {
-  id: "rec_01JC9Z8Q4R6T2V7W3X5Y1A0B2C",
+const MEMO: Memo = {
+  id: "memo_01JC9Z8Q4R6T2V7W3X5Y1A0B2C",
   site_id: ITEM_SITE_ID,
-  kind: "note",
-  status: "done",
   title: "Memo",
-  date: null,
-  period_start: null,
-  period_end: null,
   tags: [],
   content: "",
   articles: [],
@@ -422,34 +417,34 @@ describe("updateArticle and deleteArticle", () => {
   });
 });
 
-describe("record actions", () => {
-  it("creates a record", async () => {
-    const url = `/api/v1/sites/${ITEM_SITE_ID}/records`;
-    const { client, fetch } = setup(() => Response.json(RECORD, { status: 201 }), 401, url);
-    expect(await createRecord(client, ITEM_SITE_ID, { kind: "note", title: "Memo" })).toEqual({ kind: "ok", item: RECORD });
+describe("memo actions", () => {
+  it("creates a memo", async () => {
+    const url = `/api/v1/sites/${ITEM_SITE_ID}/memos`;
+    const { client, fetch } = setup(() => Response.json(MEMO, { status: 201 }), 401, url);
+    expect(await createMemo(client, ITEM_SITE_ID, { title: "Memo" })).toEqual({ kind: "ok", item: MEMO });
     expect(fetch.mock.calls[0]?.[1]?.method).toBe("POST");
   });
 
-  it("changes and deletes a record", async () => {
-    const url = `/api/v1/records/${RECORD.id}`;
-    const updated = setup(() => Response.json({ ...RECORD, status: "canceled" }), 401, url);
-    expect(await updateRecord(updated.client, RECORD.id, { status: "canceled" })).toEqual({
+  it("changes and deletes a memo", async () => {
+    const url = `/api/v1/memos/${MEMO.id}`;
+    const updated = setup(() => Response.json({ ...MEMO, content: "new" }), 401, url);
+    expect(await updateMemo(updated.client, MEMO.id, { content: "new" })).toEqual({
       kind: "ok",
-      item: { ...RECORD, status: "canceled" },
+      item: { ...MEMO, content: "new" },
     });
     expect(updated.fetch.mock.calls[0]?.[1]?.method).toBe("PATCH");
     const deleted = setup(() => new Response(null, { status: 204 }), 401, url);
-    expect(await deleteRecord(deleted.client, RECORD.id)).toEqual({ kind: "ok" });
-    expect(await deleteRecord(setup(apiError(404, "記録が見つかりません"), 401, url).client, RECORD.id)).toEqual({
+    expect(await deleteMemo(deleted.client, MEMO.id)).toEqual({ kind: "ok" });
+    expect(await deleteMemo(setup(apiError(404, "メモが見つかりません"), 401, url).client, MEMO.id)).toEqual({
       kind: "notFound",
     });
   });
 
   it("is an error without sending for an invalid ID", async () => {
-    const { client, fetch } = setup(() => Response.json(RECORD), 401, "/");
-    expect(await updateRecord(client, "a/b", { title: "x" })).toEqual({ kind: "error", message: "記録が見つかりません" });
-    expect(await deleteRecord(client, "a/b")).toEqual({ kind: "error", message: "記録が見つかりません" });
-    expect(await createRecord(client, "a/b", { kind: "note", title: "x" })).toEqual({
+    const { client, fetch } = setup(() => Response.json(MEMO), 401, "/");
+    expect(await updateMemo(client, "a/b", { title: "x" })).toEqual({ kind: "error", message: "メモが見つかりません" });
+    expect(await deleteMemo(client, "a/b")).toEqual({ kind: "error", message: "メモが見つかりません" });
+    expect(await createMemo(client, "a/b", { title: "x" })).toEqual({
       kind: "error",
       message: "サイトが見つかりません",
     });

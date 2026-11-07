@@ -132,23 +132,12 @@ export type CreateArticleRequest = {
 // At least one of the items. null clears url and published_on.
 export type UpdateArticleRequest = Partial<CreateArticleRequest>;
 
-// action (施策), review (レビュー) or note (メモ).
-export type RecordKind = "action" | "review" | "note";
-// planned (予定), done (実施済み) or canceled (中止).
-export type RecordStatus = "planned" | "done" | "canceled";
-
-// A record of a site. Dates are YYYY-MM-DD; times are UNIX time in milliseconds.
-export type SiteRecord = {
+// A memo of a site: research, measurement changes, competitors, article ideas and so on. Times are UNIX time in
+// milliseconds.
+export type Memo = {
   id: string;
   site_id: string;
-  kind: RecordKind;
-  status: RecordStatus;
   title: string;
-  // The day it was done, or the planned day.
-  date: string | null;
-  // The period the record refers to. Both or neither.
-  period_start: string | null;
-  period_end: string | null;
   tags: string[];
   content: string;
   // The linked articles, by title, then by ID.
@@ -157,41 +146,35 @@ export type SiteRecord = {
   updated_at: number;
 };
 
-export type RecordSummary = Omit<SiteRecord, "content" | "articles"> & { articles: { id: string; title: string }[] };
+export type MemoSummary = Omit<Memo, "content" | "articles"> & { articles: { id: string; title: string }[] };
 
-// GET /api/v1/sites/:id/records: undated first, then the newest. next_offset is null on the last page.
-export type RecordList = { records: RecordSummary[]; next_offset: number | null };
+// GET /api/v1/sites/:id/memos: the newest first. next_offset is null on the last page.
+export type MemoList = { memos: MemoSummary[]; next_offset: number | null };
 
-// The query of GET /api/v1/sites/:id/records. limit is 1 to 100 (default 50).
-export type RecordListQuery = {
-  kind?: string;
-  status?: string;
+// The query of GET /api/v1/sites/:id/memos. created_after (included) and created_before (excluded) are RFC 3339
+// date-times with an offset. limit is 1 to 100 (default 50).
+export type MemoListQuery = {
   tag?: string;
   article_id?: string;
-  date_from?: string;
-  date_to?: string;
+  created_after?: string;
+  created_before?: string;
   limit?: string;
   offset?: string;
 };
 
 export type ArticleListQuery = { tag?: string };
 
-export type CreateRecordRequest = {
-  kind: RecordKind;
+export type CreateMemoRequest = {
   title: string;
-  status?: RecordStatus;
-  date?: string | null;
-  period_start?: string | null;
-  period_end?: string | null;
-  tags?: string[];
   content?: string;
+  tags?: string[];
   article_ids?: string[];
 };
 
 // At least one of the items. article_ids replaces the whole set.
-export type UpdateRecordRequest = Partial<CreateRecordRequest>;
+export type UpdateMemoRequest = Partial<CreateMemoRequest>;
 
-export type TagCount = { tag: string; articles: number; records: number };
+export type TagCount = { tag: string; articles: number; memos: number };
 
 // GET /api/v1/sites/:id/tags: the most used first, up to 200. truncated is true when more exist.
 export type TagList = { tags: TagCount[]; truncated: boolean };

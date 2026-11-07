@@ -4,19 +4,19 @@ import { deleteArticle, updateArticle } from "../actions";
 import { setFlash } from "../flash";
 import { formatDateTime } from "../format";
 import { Link } from "../Link";
-import { type ApiClient, loadArticleDetail, loadRecordPage, useView } from "../load";
+import { type ApiClient, loadArticleDetail, loadMemoPage, useView } from "../load";
 import { articleFormValues, articleRequest } from "../records";
 import { navigate } from "../router";
 import { ArticleDetails, ArticleFields, SiteBreadcrumb, handleItemResult } from "./ArticlesView";
 import { ViewStatus, useDocumentTitle, viewTitle } from "./common";
-import { RecordPages } from "./RecordsView";
+import { MemoPages } from "./MemosView";
 import { UNKNOWN_RESULT_MESSAGE } from "./SitesView";
 
 const GONE_MESSAGE = "記事が見つかりません。削除された可能性があります";
-// The linked records shown per page.
-const RECORDS_PAGE = "50";
+// The linked memos shown per page.
+const MEMOS_PAGE = "50";
 
-// One article: its details, the linked records, the edit form and the deletion.
+// One article: its details, the linked memos, the edit form and the deletion.
 export function ArticleDetailView({ client, id }: { client: ApiClient; id: string }) {
   const [state, reload] = useView(() => loadArticleDetail(client, id), `article:${id}`);
   const [notice, setNotice] = useState<string | null>(null);
@@ -43,13 +43,13 @@ export function ArticleDetailView({ client, id }: { client: ApiClient; id: strin
         登録 <time dateTime={new Date(article.created_at).toISOString()}>{formatDateTime(article.created_at)}</time>・更新{" "}
         <time dateTime={new Date(article.updated_at).toISOString()}>{formatDateTime(article.updated_at)}</time>
       </p>
-      <h2>記録</h2>
+      <h2>メモ</h2>
       <div className="actions">
-        <Link to={`/sites/${site.id}/records?article=${article.id}`} className="button">
-          この記事の記録を追加
+        <Link to={`/sites/${site.id}/memos?article=${article.id}`} className="button">
+          この記事のメモを追加
         </Link>
       </div>
-      <LinkedRecords client={client} article={article} />
+      <LinkedMemos client={client} article={article} />
       <EditArticleForm
         // Keyed by the saved values, so that the form shows them again after a reload.
         key={article.updated_at}
@@ -66,11 +66,11 @@ export function ArticleDetailView({ client, id }: { client: ApiClient; id: strin
   );
 }
 
-function LinkedRecords({ client, article }: { client: ApiClient; article: Article }) {
-  const query = { article_id: article.id, limit: RECORDS_PAGE };
+function LinkedMemos({ client, article }: { client: ApiClient; article: Article }) {
+  const query = { article_id: article.id, limit: MEMOS_PAGE };
   const [state, reload] = useView(
-    () => loadRecordPage(client, article.site_id, query),
-    `article-records:${article.id}:${article.updated_at}`,
+    () => loadMemoPage(client, article.site_id, query),
+    `article-memos:${article.id}:${article.updated_at}`,
   );
   switch (state.kind) {
     case "loading":
@@ -94,12 +94,12 @@ function LinkedRecords({ client, article }: { client: ApiClient; article: Articl
       );
     case "ready":
       return (
-        <RecordPages
+        <MemoPages
           client={client}
           siteId={article.site_id}
           query={query}
           first={state.data}
-          emptyMessage="この記事の記録はまだありません。"
+          emptyMessage="この記事のメモはまだありません。"
         />
       );
   }
@@ -198,7 +198,7 @@ function DeleteArticle({ client, article, onGone }: { client: ApiClient; article
         </div>
       ) : (
         <div className="folder-form" role="group" aria-label="記事を削除">
-          <p>{article.title} を削除します。ひも付く記録は残り、この記事とのひも付けだけが外れます。元に戻せません。</p>
+          <p>{article.title} を削除します。ひも付くメモは残り、この記事とのひも付けだけが外れます。元に戻せません。</p>
           <div className="folder-form-actions">
             <button type="button" className="button-danger" onClick={() => void onDelete()} disabled={sending}>
               削除する

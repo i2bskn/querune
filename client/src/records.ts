@@ -1,30 +1,10 @@
-import type {
-  Article,
-  CreateArticleRequest,
-  CreateRecordRequest,
-  RecordKind,
-  RecordStatus,
-  SiteRecord,
-} from "../../src/api/types";
+import type { Article, CreateArticleRequest, CreateMemoRequest, Memo } from "../../src/api/types";
 
-// The labels and form values of the articles and records. No JSX here, so that the tests can load it in Node.
-
-export const KIND_LABELS: Record<RecordKind, string> = { action: "施策", review: "レビュー", note: "メモ" };
-export const STATUS_LABELS: Record<RecordStatus, string> = { planned: "予定", done: "実施済み", canceled: "中止" };
-export const RECORD_KINDS: readonly RecordKind[] = ["action", "review", "note"];
-export const RECORD_STATUSES: readonly RecordStatus[] = ["planned", "done", "canceled"];
-
-export function isRecordKind(value: string | null): value is RecordKind {
-  return value !== null && (RECORD_KINDS as readonly string[]).includes(value);
-}
-
-export function isRecordStatus(value: string | null): value is RecordStatus {
-  return value !== null && (RECORD_STATUSES as readonly string[]).includes(value);
-}
+// The form values of the articles and memos. No JSX here, so that the tests can load it in Node.
 
 export const TITLE_MAX = 200;
 export const TEXT_MAX = 10000;
-export const MAX_ARTICLES_PER_RECORD = 5;
+export const MAX_ARTICLES_PER_MEMO = 5;
 
 // The tags typed in one field: split on the separators, trimmed, without empty parts. The server checks the rest.
 export function splitTags(text: string): string[] {
@@ -64,64 +44,33 @@ export function articleRequest(values: ArticleFormValues): Required<CreateArticl
   };
 }
 
-// The values of the form of a record, as typed. articleIds are the chosen articles, in the order chosen.
-export type RecordFormValues = {
-  kind: RecordKind;
-  status: RecordStatus;
+// The values of the form of a memo, as typed. articleIds are the chosen articles, in the order chosen.
+export type MemoFormValues = {
   title: string;
-  date: string;
-  periodStart: string;
-  periodEnd: string;
-  tags: string;
   content: string;
+  tags: string;
   articleIds: string[];
 };
 
-export function emptyRecordForm(articleIds: string[] = []): RecordFormValues {
+export function emptyMemoForm(articleIds: string[] = []): MemoFormValues {
+  return { title: "", content: "", tags: "", articleIds };
+}
+
+export function memoFormValues(memo: Memo): MemoFormValues {
   return {
-    kind: "action",
-    status: "done",
-    title: "",
-    date: "",
-    periodStart: "",
-    periodEnd: "",
-    tags: "",
-    content: "",
-    articleIds,
+    title: memo.title,
+    content: memo.content,
+    tags: joinTags(memo.tags),
+    articleIds: memo.articles.map((article) => article.id),
   };
 }
 
-export function recordFormValues(record: SiteRecord): RecordFormValues {
+// The request body for the form values: every item is sent.
+export function memoRequest(values: MemoFormValues): Required<CreateMemoRequest> {
   return {
-    kind: record.kind,
-    status: record.status,
-    title: record.title,
-    date: record.date ?? "",
-    periodStart: record.period_start ?? "",
-    periodEnd: record.period_end ?? "",
-    tags: joinTags(record.tags),
-    content: record.content,
-    articleIds: record.articles.map((article) => article.id),
-  };
-}
-
-// The request body for the form values: every item is sent; blank dates as null.
-export function recordRequest(values: RecordFormValues): Required<CreateRecordRequest> {
-  return {
-    kind: values.kind,
-    status: values.status,
     title: values.title,
-    date: values.date === "" ? null : values.date,
-    period_start: values.periodStart === "" ? null : values.periodStart,
-    period_end: values.periodEnd === "" ? null : values.periodEnd,
-    tags: splitTags(values.tags),
     content: values.content,
+    tags: splitTags(values.tags),
     article_ids: values.articleIds,
   };
-}
-
-// The period as text, e.g. "2026-10-01〜2026-10-31", or null without one.
-export function periodText(start: string | null, end: string | null): string | null {
-  if (start === null || end === null) return null;
-  return `${start}〜${end}`;
 }

@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   checkArticleBody,
-  checkPeriod,
+  checkMemoBody,
+  checkMemoFilters,
   checkQueryNumber,
-  checkRecordBody,
-  checkRecordFilters,
   normalizeArticleIds,
   normalizeArticleUrl,
   normalizeContent,
@@ -123,40 +122,13 @@ describe("dates", () => {
   });
 });
 
-describe("period", () => {
-  it("needs both ends or neither, with start <= end", () => {
-    expect(checkPeriod(null, null).ok).toBe(true);
-    expect(checkPeriod("2026-01-01", "2026-01-01").ok).toBe(true);
-    expect(codeOf(checkPeriod("2026-01-01", null))).toBe("invalid_period");
-    expect(codeOf(checkPeriod(null, "2026-01-01"))).toBe("invalid_period");
-    expect(codeOf(checkPeriod("2026-01-02", "2026-01-01"))).toBe("invalid_period");
-  });
-
-  it("checks the period of a new record", () => {
-    const base = { kind: "review", title: "t" };
-    expect(checkRecordBody({ ...base, period_start: "2026-01-01", period_end: "2026-01-31" }, true).ok).toBe(true);
-    expect(codeOf(checkRecordBody({ ...base, period_start: "2026-01-01" }, true))).toBe("invalid_period");
-    expect(codeOf(checkRecordBody({ ...base, period_start: "x", period_end: "2026-01-31" }, true))).toBe(
-      "invalid_period",
-    );
-  });
-
-  it("leaves a single end of a PATCH to the check against the stored record", () => {
-    const patch = checkRecordBody({ period_end: "2026-02-01" }, false);
-    expect(patch).toEqual({ ok: true, value: { periodEnd: "2026-02-01" } });
-    // With the stored start, the result is valid or not.
-    expect(checkPeriod("2026-01-01", "2026-02-01").ok).toBe(true);
-    expect(codeOf(checkPeriod("2026-03-01", "2026-02-01"))).toBe("invalid_period");
-  });
-});
-
 describe("normalizeArticleIds", () => {
   it("removes duplicates and allows 5", () => {
     expect(normalizeArticleIds([ARTICLE_ID, ARTICLE_ID])).toEqual({ ok: true, value: [ARTICLE_ID] });
     const ids = Array.from({ length: 6 }, (_, i) => `art_01JC9Z8Q4R6T2V7W3X5Y1A0B2${i}`);
     expect(normalizeArticleIds(ids.slice(0, 5)).ok).toBe(true);
     expect(codeOf(normalizeArticleIds(ids))).toBe("invalid_articles");
-    expect(codeOf(normalizeArticleIds(["rec_01JC9Z8Q4R6T2V7W3X5Y1A0B2C"]))).toBe("invalid_articles");
+    expect(codeOf(normalizeArticleIds(["memo_01JC9Z8Q4R6T2V7W3X5Y1A0B2C"]))).toBe("invalid_articles");
     expect(codeOf(normalizeArticleIds(ARTICLE_ID))).toBe("invalid_articles");
   });
 });
@@ -169,51 +141,85 @@ describe("bodies", () => {
     });
   });
 
-  it("fills the defaults of a new record", () => {
-    expect(checkRecordBody({ kind: "action", title: "A" }, true)).toEqual({
+  it("fills the defaults of a new memo", () => {
+    expect(checkMemoBody({ title: " A " }, true)).toEqual({
       ok: true,
-      value: {
-        kind: "action",
-        status: "done",
-        title: "A",
-        date: null,
-        periodStart: null,
-        periodEnd: null,
-        tags: [],
-        content: "",
-        articleIds: [],
-      },
+      value: { title: "A", content: "", tags: [], articleIds: [] },
     });
+  });
+
+  it("returns only the given items of a memo PATCH", () => {
+    expect(checkMemoBody({ content: "x" }, false)).toEqual({ ok: true, value: { content: "x" } });
   });
 
   it("rejects unknown fields, an empty PATCH and values of another type", () => {
     expect(codeOf(checkArticleBody({ title: "A", site_id: "x" }, true))).toBe("unknown_field");
-    expect(codeOf(checkRecordBody({ id: "x" }, false))).toBe("unknown_field");
+    expect(codeOf(checkMemoBody({ id: "x" }, false))).toBe("unknown_field");
+    expect(codeOf(checkMemoBody({}, false))).toBe("invalid_request");
     expect(codeOf(checkArticleBody({}, false))).toBe("invalid_request");
     expect(codeOf(checkArticleBody({ title: 1 }, true))).toBe("invalid_title");
     expect(codeOf(checkArticleBody({ title: "a".repeat(201) }, true))).toBe("invalid_title");
-    expect(codeOf(checkRecordBody({ kind: "plan", title: "A" }, true))).toBe("invalid_kind");
-    expect(codeOf(checkRecordBody({ kind: "note", title: "A", status: "doing" }, true))).toBe("invalid_status");
-    expect(codeOf(checkRecordBody({ title: "A" }, true))).toBe("invalid_kind");
+    expect(codeOf(checkMemoBody({}, true))).toBe("invalid_title");
+    expect(codeOf(checkMemoBody({ title: "" }, true))).toBe("invalid_title");
+    expect(codeOf(checkMemoBody({ title: "A", content: 1 }, true))).toBe("invalid_content");
+  });
+
+  it.each(["kind", "status", "date", "period_start", "period_end"])("rejects the old item %s of a memo", (key) => {
+    expect(codeOf(checkMemoBody({ title: "A", [key]: null }, true))).toBe("unknown_field");
+    expect(codeOf(checkMemoBody({ [key]: null }, false))).toBe("unknown_field");
   });
 });
 
 describe("list filters", () => {
   it("checks the filters", () => {
-    expect(checkRecordFilters({ kind: "review", tag: " a ", date_from: "2026-01-01", date_to: "2026-01-01" })).toEqual({
+    expect(
+      checkMemoFilters({
+        tag: " a ",
+        article_id: ARTICLE_ID,
+        created_after: "2026-10-01T00:00:00+09:00",
+        created_before: "2026-10-01T00:00:00Z",
+      }),
+    ).toEqual({
       ok: true,
-      value: { kind: "review", tag: "a", dateFrom: "2026-01-01", dateTo: "2026-01-01" },
+      value: {
+        tag: "a",
+        articleId: ARTICLE_ID,
+        createdAfter: Date.parse("2026-09-30T15:00:00Z"),
+        createdBefore: Date.parse("2026-10-01T00:00:00Z"),
+      },
     });
     for (const input of [
-      { kind: "x" },
-      { status: "x" },
       { tag: "a,b" },
       { article_id: "x" },
-      { date_from: "2026-13-01" },
-      { date_from: "2026-01-02", date_to: "2026-01-01" },
+      { created_after: "2026-10-01T00:00:00+09:00", created_before: "2026-10-01T00:00:00+09:00" },
+      { created_after: "2026-10-02T00:00:00Z", created_before: "2026-10-01T00:00:00Z" },
     ]) {
-      expect(codeOf(checkRecordFilters(input))).toBe("invalid_query");
+      expect(codeOf(checkMemoFilters(input))).toBe("invalid_query");
     }
+  });
+
+  it.each([
+    "2026-10-01T00:00Z",
+    "2026-10-01T00:00:00Z",
+    "2026-10-01T00:00:00.1Z",
+    "2026-10-01T00:00:00.123+09:00",
+    "2026-10-01T00:00:00-05:30",
+  ])("accepts the date-time %s", (value) => {
+    expect(checkMemoFilters({ created_after: value })).toEqual({ ok: true, value: { createdAfter: Date.parse(value) } });
+  });
+
+  it.each([
+    "2026-10-01T00:00:00",
+    "2026-10-01",
+    "2026-10-01t00:00:00Z",
+    "2026-10-01T00:00:00z",
+    "2026-10-01 00:00:00Z",
+    "2026-10-01T00:00:00.1234Z",
+    "2026-10-01T00:00:00+0900",
+    "",
+  ])("rejects the date-time %j", (value) => {
+    expect(codeOf(checkMemoFilters({ created_after: value }))).toBe("invalid_query");
+    expect(codeOf(checkMemoFilters({ created_before: value }))).toBe("invalid_query");
   });
 
   it("checks the numbers of the query string", () => {

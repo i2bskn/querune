@@ -1,31 +1,31 @@
-// The handlers of the articles, records and tags of a site (/api/v1/sites/:id/...), mounted on the sites router so
-// that its requireUser runs once. The items themselves are served by routes/articles.ts and routes/records.ts.
+// The handlers of the articles, memos and tags of a site (/api/v1/sites/:id/...), mounted on the sites router so
+// that its requireUser runs once. The items themselves are served by routes/articles.ts and routes/memos.ts.
 import type { Context, MiddlewareHandler } from "hono";
 import { createFactory } from "hono/factory";
 import type {
   ArticleList,
   ArticleListQuery,
   CreateArticleRequest,
-  CreateRecordRequest,
-  RecordList,
-  RecordListQuery,
+  CreateMemoRequest,
+  MemoList,
+  MemoListQuery,
 } from "../api/types";
 import { apiError, clock, jsonBody } from "@i2bskn/workers-app-core";
 import type { AppEnv } from "../env";
 import { createArticle, listArticles } from "../records/articles";
 import { siteNotFound, type Failure } from "../records/common";
-import { createRecord, listRecords, listTags } from "../records/records";
+import { createMemo, listMemos, listTags } from "../records/memos";
 import {
   checkArticleBody,
+  checkMemoBody,
+  checkMemoFilters,
   checkQueryNumber,
-  checkRecordFilters,
-  checkRecordBody,
   checkTagFilter,
-  MAX_RECORDS_PER_SITE,
+  MAX_MEMOS_PER_SITE,
   type ArticleInput,
   type Check,
-  type RecordFilters,
-  type RecordInput,
+  type MemoFilters,
+  type MemoInput,
 } from "../records/validate";
 
 const factory = createFactory<AppEnv>();
@@ -83,33 +83,31 @@ export const createSiteArticle = factory.createHandlers(
   },
 );
 
-const RECORD_LIMIT_DEFAULT = 50;
-const RECORD_LIMIT_MAX = 100;
+const MEMO_LIMIT_DEFAULT = 50;
+const MEMO_LIMIT_MAX = 100;
 
-const recordListQuery = queryCheck<RecordListQuery, { filters: RecordFilters; limit: number; offset: number }>(
-  (query) => {
-    const filters = checkRecordFilters(query);
-    if (!filters.ok) return filters;
-    const limit = checkQueryNumber("limit", query.limit, 1, RECORD_LIMIT_MAX, RECORD_LIMIT_DEFAULT);
-    if (!limit.ok) return limit;
-    const offset = checkQueryNumber("offset", query.offset, 0, MAX_RECORDS_PER_SITE, 0);
-    if (!offset.ok) return offset;
-    return { ok: true, value: { filters: filters.value, limit: limit.value, offset: offset.value } };
-  },
-);
+const memoListQuery = queryCheck<MemoListQuery, { filters: MemoFilters; limit: number; offset: number }>((query) => {
+  const filters = checkMemoFilters(query);
+  if (!filters.ok) return filters;
+  const limit = checkQueryNumber("limit", query.limit, 1, MEMO_LIMIT_MAX, MEMO_LIMIT_DEFAULT);
+  if (!limit.ok) return limit;
+  const offset = checkQueryNumber("offset", query.offset, 0, MAX_MEMOS_PER_SITE, 0);
+  if (!offset.ok) return offset;
+  return { ok: true, value: { filters: filters.value, limit: limit.value, offset: offset.value } };
+});
 
-export const listSiteRecords = factory.createHandlers(recordListQuery, async (c) => {
+export const listSiteMemos = factory.createHandlers(memoListQuery, async (c) => {
   const { filters, limit, offset } = c.req.valid("query");
-  const result = await listRecords(c.get("db").$client, siteIdOf(c), filters, { limit, offset });
+  const result = await listMemos(c.get("db").$client, siteIdOf(c), filters, { limit, offset });
   if (!result) return apiError(c, 404, "not_found", siteNotFound);
-  const body: RecordList = { records: result.records, next_offset: result.nextOffset };
+  const body: MemoList = { memos: result.memos, next_offset: result.nextOffset };
   return c.json(body, 200);
 });
 
-export const createSiteRecord = factory.createHandlers(
-  recordsJsonBody<CreateRecordRequest, RecordInput>((body) => checkRecordBody(body, true)),
+export const createSiteMemo = factory.createHandlers(
+  recordsJsonBody<CreateMemoRequest, MemoInput>((body) => checkMemoBody(body, true)),
   async (c) => {
-    const result = await createRecord(c.get("db"), siteIdOf(c), c.req.valid("json"), clock.now());
+    const result = await createMemo(c.get("db"), siteIdOf(c), c.req.valid("json"), clock.now());
     if (!result.ok) return failureResponse(c, result);
     return c.json(result.value, 201);
   },

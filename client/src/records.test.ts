@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { articleRequest, emptyRecordForm, periodText, recordRequest, splitTags } from "./records";
+import { articleRequest, emptyMemoForm, memoFormValues, memoRequest, splitTags } from "./records";
 
 describe("splitTags", () => {
   it("splits on the separators, trims and drops empty parts", () => {
@@ -17,21 +17,26 @@ describe("requests", () => {
       tags: ["a", "b"],
       note: "n",
     });
-    expect(recordRequest({ ...emptyRecordForm(["art_1"]), title: "R", periodStart: "2026-01-01", periodEnd: "2026-01-31" })).toEqual({
-      kind: "action",
-      status: "done",
-      title: "R",
-      date: null,
-      period_start: "2026-01-01",
-      period_end: "2026-01-31",
-      tags: [],
+    expect(memoRequest({ ...emptyMemoForm(["art_1"]), title: "M", tags: "計測、 競合" })).toEqual({
+      title: "M",
       content: "",
+      tags: ["計測", "競合"],
       article_ids: ["art_1"],
     });
   });
 
-  it("shows a period only with both ends", () => {
-    expect(periodText("2026-01-01", "2026-01-31")).toBe("2026-01-01〜2026-01-31");
-    expect(periodText(null, null)).toBeNull();
+  it("fills the form of a memo from the stored memo", () => {
+    expect(
+      memoFormValues({
+        id: "memo_1",
+        site_id: "site_1",
+        title: "M",
+        tags: ["a", "b"],
+        content: "body",
+        articles: [{ id: "art_1", title: "A", url: null }],
+        created_at: 1,
+        updated_at: 2,
+      }),
+    ).toEqual({ title: "M", content: "body", tags: "a, b", articleIds: ["art_1"] });
   });
 });

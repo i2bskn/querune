@@ -1,21 +1,17 @@
-// Validation of the articles and records, shared by the REST API and the MCP tools so that both inputs behave the
+// Validation of the articles and memos, shared by the REST API and the MCP tools so that both inputs behave the
 // same. Every normalizer returns the stored value or the error code and message of the item.
-import { RECORD_KINDS, RECORD_STATUSES } from "../db/schema";
 import { ARTICLE_ID_PATTERN } from "../ids";
 import { normalizeDisplayName } from "../routes/api";
 import { isValidDate } from "../sync/dates";
 
 export const MAX_ARTICLES_PER_SITE = 1000;
-export const MAX_RECORDS_PER_SITE = 2000;
-export const MAX_ARTICLES_PER_RECORD = 5;
+export const MAX_MEMOS_PER_SITE = 2000;
+export const MAX_ARTICLES_PER_MEMO = 5;
 export const TITLE_MAX = 200;
 export const URL_MAX = 2048;
 export const TEXT_MAX = 10000;
 export const MAX_TAGS = 20;
 export const TAG_MAX = 50;
-
-export type RecordKind = (typeof RECORD_KINDS)[number];
-export type RecordStatus = (typeof RECORD_STATUSES)[number];
 
 export type Invalid = { ok: false; code: string; message: string };
 export type Check<T> = { ok: true; value: T } | Invalid;
@@ -28,13 +24,10 @@ export const messages = {
   title: `タイトルは制御文字を含まない 1〜${TITLE_MAX} 文字にしてください`,
   url: `URL は http または https で始まる ${URL_MAX} 文字以内の正しい形式にしてください（ユーザー名とパスワードは含められません）`,
   date: "日付は YYYY-MM-DD の形式で入力してください",
-  period: "期間は開始日と終了日を YYYY-MM-DD の形式で両方指定し、開始日は終了日以前にしてください",
   tags: `タグは ${MAX_TAGS} 個まで、それぞれ制御文字と「,」「、」「，」を含まない 1〜${TAG_MAX} 文字にしてください`,
-  note: `メモは改行とタブ以外の制御文字を含まない ${TEXT_MAX} 文字以内にしてください`,
-  content: `内容は改行とタブ以外の制御文字を含まない ${TEXT_MAX} 文字以内にしてください`,
-  kind: "種類は action・review・note のいずれかにしてください",
-  status: "状態は planned・done・canceled のいずれかにしてください",
-  articles: `記事は同じサイトの登録済みの記事を ${MAX_ARTICLES_PER_RECORD} 件まで指定してください`,
+  note: `備考は改行とタブ以外の制御文字を含まない ${TEXT_MAX} 文字以内にしてください`,
+  content: `本文は改行とタブ以外の制御文字を含まない ${TEXT_MAX} 文字以内にしてください`,
+  articles: `記事は同じサイトの登録済みの記事を ${MAX_ARTICLES_PER_MEMO} 件まで指定してください`,
   noItem: "変更する項目を指定してください",
 } as const;
 
@@ -76,17 +69,6 @@ function normalizeDateWith(value: unknown, code: string, message: string): Check
 
 export function normalizeDate(value: unknown): Check<string | null> {
   return normalizeDateWith(value, "invalid_date", messages.date);
-}
-
-export function normalizePeriodEnd(value: unknown): Check<string | null> {
-  return normalizeDateWith(value, "invalid_period", messages.period);
-}
-
-// Both ends or neither, and start <= end.
-export function checkPeriod(start: string | null, end: string | null): Check<{ start: string | null; end: string | null }> {
-  if ((start === null) !== (end === null)) return invalid("invalid_period", messages.period);
-  if (start !== null && end !== null && start > end) return invalid("invalid_period", messages.period);
-  return { ok: true, value: { start, end } };
 }
 
 const TAG_CONTROL = /[\u0000-\u001F\u007F-\u009F]/;
@@ -133,19 +115,7 @@ export function normalizeContent(value: unknown): Check<string> {
   return normalizeText(value, "invalid_content", messages.content);
 }
 
-export function normalizeKind(value: unknown): Check<RecordKind> {
-  return (RECORD_KINDS as readonly unknown[]).includes(value)
-    ? { ok: true, value: value as RecordKind }
-    : invalid("invalid_kind", messages.kind);
-}
-
-export function normalizeStatus(value: unknown): Check<RecordStatus> {
-  return (RECORD_STATUSES as readonly unknown[]).includes(value)
-    ? { ok: true, value: value as RecordStatus }
-    : invalid("invalid_status", messages.status);
-}
-
-// Article IDs of a record: well-formed, duplicates removed, up to 5. Whether they exist is checked with the database.
+// Article IDs of a memo: well-formed, duplicates removed, up to 5. Whether they exist is checked with the database.
 export function normalizeArticleIds(value: unknown): Check<string[]> {
   if (!Array.isArray(value)) return invalid("invalid_articles", messages.articles);
   const ids: string[] = [];
@@ -153,7 +123,7 @@ export function normalizeArticleIds(value: unknown): Check<string[]> {
     if (typeof item !== "string" || !ARTICLE_ID_PATTERN.test(item)) return invalid("invalid_articles", messages.articles);
     if (!ids.includes(item)) ids.push(item);
   }
-  if (ids.length > MAX_ARTICLES_PER_RECORD) return invalid("invalid_articles", messages.articles);
+  if (ids.length > MAX_ARTICLES_PER_MEMO) return invalid("invalid_articles", messages.articles);
   return { ok: true, value: ids };
 }
 
@@ -217,88 +187,28 @@ export function checkArticleBody(body: Record<string, unknown>, required: boolea
   return { ok: true, value };
 }
 
-export const RECORD_FIELDS = [
-  "kind",
-  "status",
-  "title",
-  "date",
-  "period_start",
-  "period_end",
-  "tags",
-  "content",
-  "article_ids",
-] as const;
+export const MEMO_FIELDS = ["title", "content", "tags", "article_ids"] as const;
 
-export type RecordInput = {
-  kind: RecordKind;
-  status: RecordStatus;
+export type MemoInput = {
   title: string;
-  date: string | null;
-  periodStart: string | null;
-  periodEnd: string | null;
-  tags: string[];
   content: string;
+  tags: string[];
   articleIds: string[];
 };
 
-// The items of a record in body, as checkArticleBody. With required, kind and title are needed, status defaults to
-// done and the period must be both-or-neither with start <= end. Without required, the period is checked against the
-// stored record by the caller (checkPeriod), since one end may be given alone.
-export function checkRecordBody(body: Record<string, unknown>, required: true): Check<RecordInput>;
-export function checkRecordBody(body: Record<string, unknown>, required: false): Check<Partial<RecordInput>>;
-export function checkRecordBody(body: Record<string, unknown>, required: boolean): Check<Partial<RecordInput>> {
-  const unknown = firstUnknown(body, RECORD_FIELDS);
+// The items of a memo in body, as checkArticleBody: with required, title is needed and the other missing items get
+// their defaults.
+export function checkMemoBody(body: Record<string, unknown>, required: true): Check<MemoInput>;
+export function checkMemoBody(body: Record<string, unknown>, required: false): Check<Partial<MemoInput>>;
+export function checkMemoBody(body: Record<string, unknown>, required: boolean): Check<Partial<MemoInput>> {
+  const unknown = firstUnknown(body, MEMO_FIELDS);
   if (unknown !== null) return unknownFieldError(unknown);
   if (!required && Object.keys(body).length === 0) return invalid("invalid_request", messages.noItem);
-  const value: Partial<RecordInput> = {};
-  if (required || "kind" in body) {
-    const kind = normalizeKind(body.kind);
-    if (!kind.ok) return kind;
-    value.kind = kind.value;
-  }
-  if ("status" in body) {
-    const status = normalizeStatus(body.status);
-    if (!status.ok) return status;
-    value.status = status.value;
-  } else if (required) {
-    value.status = "done";
-  }
+  const value: Partial<MemoInput> = {};
   if (required || "title" in body) {
     const title = normalizeTitle(body.title);
     if (!title.ok) return title;
     value.title = title.value;
-  }
-  if ("date" in body) {
-    const date = normalizeDate(body.date);
-    if (!date.ok) return date;
-    value.date = date.value;
-  } else if (required) {
-    value.date = null;
-  }
-  if ("period_start" in body) {
-    const start = normalizePeriodEnd(body.period_start);
-    if (!start.ok) return start;
-    value.periodStart = start.value;
-  } else if (required) {
-    value.periodStart = null;
-  }
-  if ("period_end" in body) {
-    const end = normalizePeriodEnd(body.period_end);
-    if (!end.ok) return end;
-    value.periodEnd = end.value;
-  } else if (required) {
-    value.periodEnd = null;
-  }
-  if (required) {
-    const period = checkPeriod(value.periodStart ?? null, value.periodEnd ?? null);
-    if (!period.ok) return period;
-  }
-  if ("tags" in body) {
-    const tags = normalizeTags(body.tags);
-    if (!tags.ok) return tags;
-    value.tags = tags.value;
-  } else if (required) {
-    value.tags = [];
   }
   if ("content" in body) {
     const content = normalizeContent(body.content);
@@ -306,6 +216,13 @@ export function checkRecordBody(body: Record<string, unknown>, required: boolean
     value.content = content.value;
   } else if (required) {
     value.content = "";
+  }
+  if ("tags" in body) {
+    const tags = normalizeTags(body.tags);
+    if (!tags.ok) return tags;
+    value.tags = tags.value;
+  } else if (required) {
+    value.tags = [];
   }
   if ("article_ids" in body) {
     const ids = normalizeArticleIds(body.article_ids);
@@ -317,23 +234,20 @@ export function checkRecordBody(body: Record<string, unknown>, required: boolean
   return { ok: true, value };
 }
 
-// The filters of a list (query string or tool arguments), checked with the code invalid_query.
-export type ListFilterInput = {
-  kind?: string | undefined;
-  status?: string | undefined;
+// The filters of the list of memos (query string or tool arguments), checked with the code invalid_query.
+export type MemoFilterInput = {
   tag?: string | undefined;
   article_id?: string | undefined;
-  date_from?: string | undefined;
-  date_to?: string | undefined;
+  created_after?: string | undefined;
+  created_before?: string | undefined;
 };
 
-export type RecordFilters = {
-  kind?: RecordKind;
-  status?: RecordStatus;
+// Times are UNIX time in milliseconds: createdAfter is included, createdBefore is not.
+export type MemoFilters = {
   tag?: string;
   articleId?: string;
-  dateFrom?: string;
-  dateTo?: string;
+  createdAfter?: number;
+  createdBefore?: number;
 };
 
 function invalidQuery(name: string): Invalid {
@@ -346,18 +260,20 @@ export function checkTagFilter(value: string | undefined): Check<string | undefi
   return tag === null ? invalidQuery("tag") : { ok: true, value: tag };
 }
 
-export function checkRecordFilters(input: ListFilterInput): Check<RecordFilters> {
-  const filters: RecordFilters = {};
-  if (input.kind !== undefined) {
-    const kind = normalizeKind(input.kind);
-    if (!kind.ok) return invalidQuery("kind");
-    filters.kind = kind.value;
-  }
-  if (input.status !== undefined) {
-    const status = normalizeStatus(input.status);
-    if (!status.ok) return invalidQuery("status");
-    filters.status = status.value;
-  }
+// An RFC 3339 date-time with an offset: YYYY-MM-DDTHH:MM, optional :SS with optional fractional seconds (1 to 3
+// digits), then Z or ±HH:MM. Uppercase T and Z only.
+const DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+// The UNIX time in milliseconds of an RFC 3339 date-time with an offset, or null. Date.parse decides the rest: V8
+// rolls over values such as 2026-02-30 or T24:00, and they are accepted.
+export function parseDateTime(value: string): number | null {
+  if (!DATE_TIME.test(value)) return null;
+  const time = Date.parse(value);
+  return Number.isNaN(time) ? null : time;
+}
+
+export function checkMemoFilters(input: MemoFilterInput): Check<MemoFilters> {
+  const filters: MemoFilters = {};
   const tag = checkTagFilter(input.tag);
   if (!tag.ok) return tag;
   if (tag.value !== undefined) filters.tag = tag.value;
@@ -365,16 +281,22 @@ export function checkRecordFilters(input: ListFilterInput): Check<RecordFilters>
     if (!ARTICLE_ID_PATTERN.test(input.article_id)) return invalidQuery("article_id");
     filters.articleId = input.article_id;
   }
-  if (input.date_from !== undefined) {
-    if (!isValidDate(input.date_from)) return invalidQuery("date_from");
-    filters.dateFrom = input.date_from;
+  if (input.created_after !== undefined) {
+    const time = parseDateTime(input.created_after);
+    if (time === null) return invalidQuery("created_after");
+    filters.createdAfter = time;
   }
-  if (input.date_to !== undefined) {
-    if (!isValidDate(input.date_to)) return invalidQuery("date_to");
-    filters.dateTo = input.date_to;
+  if (input.created_before !== undefined) {
+    const time = parseDateTime(input.created_before);
+    if (time === null) return invalidQuery("created_before");
+    filters.createdBefore = time;
   }
-  if (filters.dateFrom !== undefined && filters.dateTo !== undefined && filters.dateFrom > filters.dateTo) {
-    return invalid("invalid_query", "絞り込みの開始日は終了日以前にしてください");
+  if (
+    filters.createdAfter !== undefined &&
+    filters.createdBefore !== undefined &&
+    filters.createdAfter >= filters.createdBefore
+  ) {
+    return invalid("invalid_query", "絞り込みの開始時刻は終了時刻より前にしてください");
   }
   return { ok: true, value: filters };
 }

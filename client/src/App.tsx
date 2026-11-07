@@ -9,9 +9,9 @@ import { ArticleDetailView } from "./views/ArticleDetailView";
 import { ArticlesView } from "./views/ArticlesView";
 import { ErrorBoundary } from "./views/ErrorBoundary";
 import { HomeView } from "./views/HomeView";
+import { MemoDetailView } from "./views/MemoDetailView";
+import { MemosView } from "./views/MemosView";
 import { AppShell } from "./views/Sidebar";
-import { RecordDetailView } from "./views/RecordDetailView";
-import { RecordsView } from "./views/RecordsView";
 import { SiteDetailView } from "./views/SiteDetailView";
 import { SitesView } from "./views/SitesView";
 import { UsersView } from "./views/UsersView";
@@ -69,12 +69,12 @@ function Screen({ route, user, path }: { route: Route; user: User; path: string 
       return <SiteDetailView client={client} id={route.id} />;
     case "siteArticles":
       return <ArticlesView client={client} siteId={route.id} path={path} />;
-    case "siteRecords":
-      return <RecordsView client={client} siteId={route.id} path={path} />;
+    case "siteMemos":
+      return <MemosView client={client} siteId={route.id} path={path} />;
     case "articleDetail":
       return <ArticleDetailView client={client} id={route.id} />;
-    case "recordDetail":
-      return <RecordDetailView client={client} id={route.id} />;
+    case "memoDetail":
+      return <MemoDetailView client={client} id={route.id} />;
     case "users":
       return <UsersView client={client} currentUserId={user.id} />;
     case "notFound":

@@ -63,10 +63,10 @@ export function newArticleId(now: number): string {
   return `art_${newUlid(now)}`;
 }
 
-export const RECORD_ID_PATTERN = new RegExp(`^rec_${ULID_PATTERN}$`);
+export const MEMO_ID_PATTERN = new RegExp(`^memo_${ULID_PATTERN}$`);
 
-export function newRecordId(now: number): string {
-  return `rec_${newUlid(now)}`;
+export function newMemoId(now: number): string {
+  return `memo_${newUlid(now)}`;
 }
 
 export function base64Url(bytes: Uint8Array): string {

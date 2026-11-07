@@ -3,9 +3,9 @@ import type {
   Article,
   ArticleSummary,
   GoogleStatus,
-  RecordList,
+  Memo,
+  MemoList,
   Site,
-  SiteRecord,
   SyncStatus,
   TagList,
   User,
@@ -15,9 +15,9 @@ import {
   loadArticleDetail,
   loadArticlesView,
   loadMe,
-  loadRecordDetail,
-  loadRecordPage,
-  loadRecordsView,
+  loadMemoDetail,
+  loadMemoPage,
+  loadMemosView,
   loadSiteDetail,
   loadSites,
   loadSyncPanel,
@@ -212,24 +212,19 @@ const ARTICLE: Article = {
 };
 const { note: _note, ...SUMMARY } = ARTICLE;
 const ARTICLE_SUMMARY: ArticleSummary = SUMMARY;
-const TAGS: TagList = { tags: [{ tag: "topic:ai", articles: 1, records: 0 }], truncated: false };
-const RECORD: SiteRecord = {
-  id: "rec_01JC9Z8Q4R6T2V7W3X5Y1A0B2C",
+const TAGS: TagList = { tags: [{ tag: "topic:ai", articles: 1, memos: 0 }], truncated: false };
+const MEMO: Memo = {
+  id: "memo_01JC9Z8Q4R6T2V7W3X5Y1A0B2C",
   site_id: SITE.id,
-  kind: "action",
-  status: "done",
   title: "Rewrite",
-  date: "2026-10-02",
-  period_start: null,
-  period_end: null,
   tags: [],
   content: "",
   articles: [{ id: ARTICLE.id, title: "Guide", url: ARTICLE.url }],
   created_at: 1,
   updated_at: 2,
 };
-const RECORD_LIST: RecordList = {
-  records: [{ ...RECORD, articles: [{ id: ARTICLE.id, title: "Guide" }] }].map(({ content: _content, ...rest }) => rest),
+const MEMO_LIST: MemoList = {
+  memos: [{ ...MEMO, articles: [{ id: ARTICLE.id, title: "Guide" }] }].map(({ content: _content, ...rest }) => rest),
   next_offset: null,
 };
 
@@ -276,60 +271,62 @@ describe("loadArticleDetail", () => {
   });
 });
 
-describe("loadRecordPage", () => {
+describe("loadMemoPage", () => {
   it("sends the query and returns the page", async () => {
     const { client } = setup({
-      [`/api/v1/sites/${SITE.id}/records?article_id=${ARTICLE.id}&limit=50&offset=50`]: [json(200, RECORD_LIST)],
+      [`/api/v1/sites/${SITE.id}/memos?article_id=${ARTICLE.id}&limit=50&offset=50`]: [json(200, MEMO_LIST)],
     });
-    expect(await loadRecordPage(client, SITE.id, { article_id: ARTICLE.id, limit: "50", offset: "50" })).toEqual({
+    expect(await loadMemoPage(client, SITE.id, { article_id: ARTICLE.id, limit: "50", offset: "50" })).toEqual({
       kind: "ready",
-      data: RECORD_LIST,
+      data: MEMO_LIST,
     });
   });
 
   it("is an error with the API message on 400", async () => {
-    const { client } = setup({ [`/api/v1/sites/${SITE.id}/records?kind=x`]: [apiError(400, "絞り込みの条件 kind が正しくありません")] });
-    expect(await loadRecordPage(client, SITE.id, { kind: "x" })).toEqual({
+    const { client } = setup({
+      [`/api/v1/sites/${SITE.id}/memos?created_after=x`]: [apiError(400, "絞り込みの条件 created_after が正しくありません")],
+    });
+    expect(await loadMemoPage(client, SITE.id, { created_after: "x" })).toEqual({
       kind: "error",
-      message: "絞り込みの条件 kind が正しくありません",
+      message: "絞り込みの条件 created_after が正しくありません",
     });
   });
 });
 
-describe("loadRecordsView", () => {
+describe("loadMemosView", () => {
   it("returns the site, the first page, the tags and the articles", async () => {
     const siteUrl = `/api/v1/sites/${SITE.id}`;
     const { client } = setup({
       [siteUrl]: [json(200, SITE)],
-      [`${siteUrl}/records?kind=action`]: [json(200, RECORD_LIST)],
+      [`${siteUrl}/memos?tag=topic%3Aai`]: [json(200, MEMO_LIST)],
       [`${siteUrl}/tags`]: [json(200, TAGS)],
       [`${siteUrl}/articles`]: [json(200, { articles: [ARTICLE_SUMMARY] })],
     });
-    expect(await loadRecordsView(client, SITE.id, { kind: "action" })).toEqual({
+    expect(await loadMemosView(client, SITE.id, { tag: "topic:ai" })).toEqual({
       kind: "ready",
-      data: { site: SITE, records: RECORD_LIST, tags: TAGS, articles: [ARTICLE_SUMMARY] },
+      data: { site: SITE, memos: MEMO_LIST, tags: TAGS, articles: [ARTICLE_SUMMARY] },
     });
   });
 });
 
-describe("loadRecordDetail", () => {
-  it("returns the record, its site and the articles of the site", async () => {
+describe("loadMemoDetail", () => {
+  it("returns the memo, its site and the articles of the site", async () => {
     const { client } = setup({
-      [`/api/v1/records/${RECORD.id}`]: [json(200, RECORD)],
+      [`/api/v1/memos/${MEMO.id}`]: [json(200, MEMO)],
       [`/api/v1/sites/${SITE.id}`]: [json(200, SITE)],
       [`/api/v1/sites/${SITE.id}/articles`]: [json(200, { articles: [ARTICLE_SUMMARY] })],
     });
-    expect(await loadRecordDetail(client, RECORD.id)).toEqual({
+    expect(await loadMemoDetail(client, MEMO.id)).toEqual({
       kind: "ready",
-      data: { record: RECORD, site: SITE, articles: [ARTICLE_SUMMARY] },
+      data: { memo: MEMO, site: SITE, articles: [ARTICLE_SUMMARY] },
     });
   });
 
   it("is not found on 404 and without sending for an invalid ID", async () => {
-    const { client } = setup({ [`/api/v1/records/${RECORD.id}`]: [apiError(404, "記録が見つかりません")] });
-    expect(await loadRecordDetail(client, RECORD.id)).toEqual({ kind: "notFound" });
+    const { client } = setup({ [`/api/v1/memos/${MEMO.id}`]: [apiError(404, "メモが見つかりません")] });
+    expect(await loadMemoDetail(client, MEMO.id)).toEqual({ kind: "notFound" });
     const invalid = setup({});
-    expect(await loadRecordDetail(invalid.client, "a.b")).toEqual({ kind: "notFound" });
+    expect(await loadMemoDetail(invalid.client, "a.b")).toEqual({ kind: "notFound" });
     expect(invalid.fetch).not.toHaveBeenCalled();
   });
 });

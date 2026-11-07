@@ -5,7 +5,7 @@ import { check, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex
 export { users, sessions, type UserRow, type SessionRow } from "@i2bskn/workers-app-core/schema";
 
 // The sites shown to every user. No column refers to a user, so deleting a user leaves the sites in place.
-// articles and records refer to this table with ON DELETE CASCADE. A migration that rebuilds this table (copy, DROP
+// articles and memos refer to this table with ON DELETE CASCADE. A migration that rebuilds this table (copy, DROP
 // TABLE and rename, as drizzle-kit generates for some column changes) deletes the rows that refer to it, because D1
 // runs migrations in a transaction where PRAGMA foreign_keys=OFF has no effect. Check generated migrations for DROP
 // TABLE.
@@ -151,7 +151,7 @@ export type SyncDayRow = typeof syncDays.$inferSelect;
 export type PendingPurgeRow = typeof pendingPurges.$inferSelect;
 
 // The article ledger of a site. url is the canonical URL (NULL while the article has none). published_on is
-// YYYY-MM-DD. tags is a JSON array of strings. record_articles refers to this table with ON DELETE CASCADE: a
+// YYYY-MM-DD. tags is a JSON array of strings. memo_articles refers to this table with ON DELETE CASCADE: a
 // migration that rebuilds this table deletes the links (see sites). Check generated migrations for DROP TABLE.
 export const articles = sqliteTable(
   "articles",
@@ -175,52 +175,38 @@ export const articles = sqliteTable(
   ],
 );
 
-export const RECORD_KINDS = ["action", "review", "note"] as const;
-export const RECORD_STATUSES = ["planned", "done", "canceled"] as const;
-
-// The actions, reviews and notes of a site. date is the day it was done or the planned day; period_start and
-// period_end are the period it refers to (both or neither). Dates are YYYY-MM-DD; tags is a JSON array of strings.
-// record_articles refers to this table with ON DELETE CASCADE: a migration that rebuilds this table deletes the links
-// (see sites). Check generated migrations for DROP TABLE.
-export const records = sqliteTable(
-  "records",
+// The notes about a site: research, measurement changes, competitors, article ideas and so on. tags is a JSON array of
+// strings. memo_articles refers to this table with ON DELETE CASCADE: a migration that rebuilds this table deletes the
+// links (see sites). Check generated migrations for DROP TABLE.
+export const memos = sqliteTable(
+  "memos",
   {
     id: text("id").primaryKey(),
     siteId: text("site_id")
       .notNull()
       .references(() => sites.id, { onDelete: "cascade" }),
-    kind: text("kind", { enum: RECORD_KINDS }).notNull(),
-    status: text("status", { enum: RECORD_STATUSES }).notNull(),
     title: text("title").notNull(),
-    date: text("date"),
-    periodStart: text("period_start"),
-    periodEnd: text("period_end"),
     tags: text("tags").notNull().default("[]"),
     content: text("content").notNull().default(""),
     createdAt: integer("created_at").notNull(),
     updatedAt: integer("updated_at").notNull(),
   },
-  (t) => [
-    index("records_site_id_date_idx").on(t.siteId, t.date),
-    index("records_site_id_kind_status_idx").on(t.siteId, t.kind, t.status),
-    check("records_kind_check", sql`${t.kind} IN ('action', 'review', 'note')`),
-    check("records_status_check", sql`${t.status} IN ('planned', 'done', 'canceled')`),
-  ],
+  (t) => [index("memos_site_id_created_at_idx").on(t.siteId, t.createdAt)],
 );
 
-// The articles a record is about. Both sides belong to the same site.
-export const recordArticles = sqliteTable(
-  "record_articles",
+// The articles a memo is about. Both sides belong to the same site.
+export const memoArticles = sqliteTable(
+  "memo_articles",
   {
-    recordId: text("record_id")
+    memoId: text("memo_id")
       .notNull()
-      .references(() => records.id, { onDelete: "cascade" }),
+      .references(() => memos.id, { onDelete: "cascade" }),
     articleId: text("article_id")
       .notNull()
       .references(() => articles.id, { onDelete: "cascade" }),
   },
-  (t) => [primaryKey({ columns: [t.recordId, t.articleId] }), index("record_articles_article_id_idx").on(t.articleId)],
+  (t) => [primaryKey({ columns: [t.memoId, t.articleId] }), index("memo_articles_article_id_idx").on(t.articleId)],
 );
 
 export type ArticleRow = typeof articles.$inferSelect;
-export type RecordRow = typeof records.$inferSelect;
+export type MemoRow = typeof memos.$inferSelect;

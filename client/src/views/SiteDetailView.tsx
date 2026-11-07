@@ -34,12 +34,12 @@ export function SiteDetailView({ client, id }: { client: ApiClient; id: string }
         <h1>{site.name}</h1>
         <p className="lead site-url">{site.url}</p>
       </header>
-      <nav className="actions" aria-label="サイトの記事と記録">
+      <nav className="actions" aria-label="サイトの記事とメモ">
         <Link to={`/sites/${site.id}/articles`} className="button">
           記事
         </Link>
-        <Link to={`/sites/${site.id}/records`} className="button">
-          記録
+        <Link to={`/sites/${site.id}/memos`} className="button">
+          メモ
         </Link>
       </nav>
       {notice !== null && (
@@ -194,7 +194,7 @@ function DeleteSite({ client, site, onGone }: { client: ApiClient; site: Site; o
         </div>
       ) : (
         <form className="folder-form" aria-label="サイトを削除" onSubmit={(event) => void onSubmit(event)}>
-          <p>{site.name} を削除します。取り込み済みのデータと、記事・記録も削除します。元に戻せません。</p>
+          <p>{site.name} を削除します。取り込み済みのデータと、記事・メモも削除します。元に戻せません。</p>
           <label>
             確認のため、このサイトの名前を入力してください
             <input

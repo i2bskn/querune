@@ -26,9 +26,9 @@ describe("currentNavItem", () => {
     [{ name: "sites" }, "sites"],
     [{ name: "siteDetail", id: "site_1" }, "sites"],
     [{ name: "siteArticles", id: "site_1" }, "sites"],
-    [{ name: "siteRecords", id: "site_1" }, "sites"],
+    [{ name: "siteMemos", id: "site_1" }, "sites"],
     [{ name: "articleDetail", id: "art_1" }, "sites"],
-    [{ name: "recordDetail", id: "rec_1" }, "sites"],
+    [{ name: "memoDetail", id: "memo_1" }, "sites"],
     [{ name: "users" }, "users"],
     [{ name: "notFound" }, null],
   ])("maps %o", (route, expected) => {

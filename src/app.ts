@@ -4,7 +4,7 @@ import { core } from "./core";
 import type { AppEnv } from "./env";
 import articlesApi from "./routes/articles";
 import googleApi from "./routes/google";
-import recordsApi from "./routes/records";
+import memosApi from "./routes/memos";
 import sitesApi from "./routes/sites";
 
 const { loadConfigMiddleware, sameOrigin, securityHeaders, unifyHost } = core.middleware;
@@ -30,7 +30,7 @@ const apiRoutes = app
   .route("/api/v1/sites", sitesApi)
   .route("/api/v1/google", googleApi)
   .route("/api/v1/articles", articlesApi)
-  .route("/api/v1/records", recordsApi);
+  .route("/api/v1/memos", memosApi);
 
 // Types for hc<AppType>(). Only /api/v1/* is included.
 export type AppType = typeof apiRoutes;

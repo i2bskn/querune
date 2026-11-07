@@ -62,7 +62,7 @@ export function ArticlesView({ client, siteId, path }: { client: ApiClient; site
 }
 
 // サイト › <site name>, the start of the breadcrumbs of the screens of a site.
-export function SiteBreadcrumb({ site, section }: { site: Site; section?: "articles" | "records" }) {
+export function SiteBreadcrumb({ site, section }: { site: Site; section?: "articles" | "memos" }) {
   return (
     <p className="breadcrumb">
       <Link to="/sites">サイト</Link> › <Link to={`/sites/${site.id}`}>{site.name}</Link>
@@ -72,10 +72,10 @@ export function SiteBreadcrumb({ site, section }: { site: Site; section?: "artic
           › <Link to={`/sites/${site.id}/articles`}>記事</Link>
         </>
       )}
-      {section === "records" && (
+      {section === "memos" && (
         <>
           {" "}
-          › <Link to={`/sites/${site.id}/records`}>記録</Link>
+          › <Link to={`/sites/${site.id}/memos`}>メモ</Link>
         </>
       )}
     </p>
@@ -271,7 +271,7 @@ export function ArticleFields({
       </label>
       <TagsField value={values.tags} onChange={(tags) => onChange({ ...values, tags })} disabled={disabled} />
       <label>
-        メモ（省略可。{TEXT_MAX}&nbsp;文字以内）
+        備考（省略可。{TEXT_MAX}&nbsp;文字以内）
         <textarea
           value={values.note}
           onChange={(event) => onChange({ ...values, note: event.target.value })}
@@ -287,10 +287,12 @@ export function TagsField({
   value,
   onChange,
   disabled,
+  placeholder = "stage:draft, topic:ai",
 }: {
   value: string;
   onChange: (value: string) => void;
   disabled: boolean;
+  placeholder?: string;
 }) {
   return (
     <label>
@@ -300,7 +302,7 @@ export function TagsField({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         autoComplete="off"
-        placeholder="stage:draft, topic:ai"
+        placeholder={placeholder}
         disabled={disabled}
       />
     </label>
@@ -325,7 +327,7 @@ export function ArticleDetails({ article }: { article: Article }) {
       <dd>{article.published_on ?? "未設定"}</dd>
       <dt>タグ</dt>
       <dd>{article.tags.length === 0 ? "なし" : <Tags tags={article.tags} />}</dd>
-      <dt>メモ</dt>
+      <dt>備考</dt>
       <dd>{article.note === "" ? "なし" : <span className="text-body">{article.note}</span>}</dd>
     </dl>
   );

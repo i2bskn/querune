@@ -14,7 +14,7 @@ export const core = createCore<Bindings>({
   consent: {
     // Keep this in line with the tools of src/mcp/tools.ts and src/mcp/record-tools.ts.
     description:
-      "許可すると、このアプリはあなたとして、このQueruneに登録されたサイトの一覧と、取り込んだ Search Console・GA4 の集計と取り込みの状況を読み取れるようになります。また、サイトの記事と記録（施策・レビュー・メモ）を読み取り、登録・編集できるようになります。このアプリから削除はできません。",
+      "許可すると、このアプリはあなたとして、このQueruneに登録されたサイトの一覧と、取り込んだ Search Console・GA4 の集計と取り込みの状況を読み取れるようになります。また、サイトの記事とメモを読み取り、登録・編集できるようになります。このアプリから削除はできません。",
   },
 });
 
