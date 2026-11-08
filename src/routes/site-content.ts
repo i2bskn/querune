@@ -4,6 +4,7 @@ import type { Context, MiddlewareHandler } from "hono";
 import { createFactory } from "hono/factory";
 import { eq } from "drizzle-orm";
 import type {
+  Article,
   ArticleList,
   ArticleListQuery,
   CreateArticleRequest,
@@ -20,7 +21,7 @@ import { apiError, clock, jsonBody, type Db } from "@i2bskn/workers-app-core";
 import { sites, type SiteRow } from "../db/schema";
 import type { AppEnv } from "../env";
 import { SITE_ID_PATTERN } from "../ids";
-import { createArticle, listArticles } from "../records/articles";
+import { createArticle, findArticle, listArticles } from "../records/articles";
 import { siteNotFound, type Failure } from "../records/common";
 import { createMemo, listMemos, listTags } from "../records/memos";
 import {
@@ -162,16 +163,32 @@ function originOf(url: string): string | null {
   }
 }
 
-// The URL of every article of the site (null for the articles without one): the count gives the room left and the
-// URLs tell the registered ones. At most MAX_ARTICLES_PER_SITE rows, so one query and a Set.
-async function siteArticleUrls(db: Db, siteId: string): Promise<{ count: number; urls: Set<string> }> {
+type RegisteredArticle = { id: string; dated: boolean };
+
+// The articles of the site by URL (the articles without a URL are only counted): the count gives the room left, and
+// the map tells the registered URLs and whether their article has a published date. At most MAX_ARTICLES_PER_SITE
+// rows, so one query and a Map.
+async function siteArticleUrls(db: Db, siteId: string): Promise<{ count: number; urls: Map<string, RegisteredArticle> }> {
   const { results } = await db.$client
-    .prepare("SELECT url FROM articles WHERE site_id = ?")
+    .prepare("SELECT id, url, published_on FROM articles WHERE site_id = ?")
     .bind(siteId)
-    .all<{ url: string | null }>();
-  const urls = new Set<string>();
-  for (const row of results) if (row.url !== null) urls.add(row.url);
+    .all<{ id: string; url: string | null; published_on: string | null }>();
+  const urls = new Map<string, RegisteredArticle>();
+  for (const row of results) {
+    if (row.url !== null) urls.set(row.url, { id: row.id, dated: row.published_on !== null });
+  }
   return { count: results.length, urls };
+}
+
+// Sets the published date of a registered article that has none. null when the article is gone or got a date in the
+// meantime (the date set by someone else is kept).
+async function fillPublishedOn(db: Db, id: string, publishedOn: string, now: number): Promise<Article | null> {
+  const result = await db.$client
+    .prepare("UPDATE articles SET published_on = ?, updated_at = ? WHERE id = ? AND published_on IS NULL")
+    .bind(publishedOn, now, id)
+    .run();
+  if ((result.meta.changes ?? 0) === 0) return null;
+  return findArticle(db, id);
 }
 
 const SITEMAP_FIELDS = ["sitemap_url"];
@@ -207,7 +224,10 @@ export const readSiteSitemap = factory.createHandlers(sitemapBody, async (c) => 
   const existing = await siteArticleUrls(c.get("db"), site.id);
   const body: ReadSitemapResponse = {
     sitemap_url: sitemapUrl,
-    urls: result.urls.map((entry) => ({ ...entry, registered: existing.urls.has(entry.url) })),
+    urls: result.urls.map((entry) => {
+      const article = existing.urls.get(entry.url);
+      return { ...entry, registered: article !== undefined, undated: article !== undefined && !article.dated };
+    }),
     truncated: result.truncated,
     skipped_urls: result.skippedUrls,
     skipped_sitemaps: result.skippedSitemaps,
@@ -265,8 +285,9 @@ export const importSiteArticles = factory.createHandlers(importBody, async (c) =
   // request and the article limit cuts it at one place.
   const budget: FetchBudget = { remaining: IMPORT_FETCH_BUDGET };
   const deadline = Date.now() + IMPORT_DEADLINE_MS;
+  // A registered article is read again only to fill its missing published date.
   const pages = await mapConcurrently(urls, IMPORT_CONCURRENCY, async (url): Promise<PageResult | "exists"> => {
-    if (existing.urls.has(url)) return "exists";
+    if (existing.urls.get(url)?.dated === true) return "exists";
     if (Date.now() >= deadline) return { ok: false, error: importMessages.budget };
     return readPage(url, site.url, budget);
   });
@@ -275,9 +296,14 @@ export const importSiteArticles = factory.createHandlers(importBody, async (c) =
   let limitReached = false;
   for (const [i, url] of urls.entries()) {
     const page = pages[i] ?? { ok: false, error: importMessages.budget };
-    // The page may also redirect to the URL of a registered article.
-    if (page === "exists" || (page.ok && existing.urls.has(page.url))) {
+    if (page === "exists") {
       results.push({ url, status: "exists" });
+      continue;
+    }
+    // The page may also redirect to the URL of a registered article.
+    const registered = existing.urls.get(page.ok ? page.url : url);
+    if (registered !== undefined) {
+      results.push(await fillDate(db, url, registered, page, now));
       continue;
     }
     // Once the limit is reached, every URL left is reported with it, even those whose page failed.
@@ -298,7 +324,8 @@ export const importSiteArticles = factory.createHandlers(importBody, async (c) =
     if (created.ok) {
       const { note: _note, ...article } = created.value;
       results.push({ url, status: "created", article });
-      existing.urls.add(page.url);
+      // Another URL of the request that leads to the same page is reported as registered, not read for a date.
+      existing.urls.set(page.url, { id: article.id, dated: true });
       continue;
     }
     if (created.status === 404) return failureResponse(c, created);
@@ -314,3 +341,21 @@ export const importSiteArticles = factory.createHandlers(importBody, async (c) =
   const body: ImportArticlesResponse = { results };
   return c.json(body, 200);
 });
+
+// The result of a URL whose article is registered: the published date read from the page fills the missing one.
+async function fillDate(
+  db: Db,
+  url: string,
+  registered: RegisteredArticle,
+  page: PageResult,
+  now: number,
+): Promise<ImportArticleResult> {
+  if (registered.dated) return { url, status: "exists" };
+  if (!page.ok) return { url, status: "failed", error: page.error };
+  if (page.publishedOn === null) return { url, status: "failed", error: importMessages.noDate };
+  const article = await fillPublishedOn(db, registered.id, page.publishedOn, now);
+  if (article === null) return { url, status: "exists" };
+  registered.dated = true;
+  const { note: _note, ...summary } = article;
+  return { url, status: "dated", article: summary };
+}

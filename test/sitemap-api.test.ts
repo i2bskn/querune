@@ -94,25 +94,29 @@ describe("authentication and the site", () => {
 describe("POST /api/v1/sites/:id/articles/sitemap", () => {
   it("reads the default sitemap and marks the registered URLs", async () => {
     const site = await createSite({ url: ORIGIN });
-    await newArticle(site.id, { url: `${ORIGIN}/b` });
+    await newArticle(site.id, { url: `${ORIGIN}/b`, published_on: "2026-01-01" });
+    await newArticle(site.id, { url: `${ORIGIN}/d` });
     await newArticle(site.id, { title: "No URL" });
     pages[`${ORIGIN}/sitemap.xml`] = xml(
       `<?xml version="1.0"?><urlset><url><loc>${ORIGIN}/a</loc><lastmod>2026-10-01T00:00:00Z</lastmod></url>` +
-        `<url><loc>${ORIGIN}/b</loc></url><url><loc>https://www.example.com/c</loc></url></urlset>`,
+        `<url><loc>${ORIGIN}/b</loc></url><url><loc>https://www.example.com/c</loc></url>` +
+        `<url><loc>${ORIGIN}/d</loc></url></urlset>`,
     );
     const res = await post(`/api/v1/sites/${site.id}/articles/sitemap`, {});
     expect(res.status).toBe(200);
     expect((await res.json()) as ReadSitemapResponse).toEqual({
       sitemap_url: `${ORIGIN}/sitemap.xml`,
       urls: [
-        { url: `${ORIGIN}/a`, lastmod: "2026-10-01", registered: false },
-        { url: `${ORIGIN}/b`, lastmod: null, registered: true },
+        { url: `${ORIGIN}/a`, lastmod: "2026-10-01", registered: false, undated: false },
+        { url: `${ORIGIN}/b`, lastmod: null, registered: true, undated: false },
+        // A registered article without a published date.
+        { url: `${ORIGIN}/d`, lastmod: null, registered: true, undated: true },
       ],
       truncated: false,
       skipped_urls: 1,
       skipped_sitemaps: 0,
       // The article without a URL counts too.
-      remaining: MAX_ARTICLES_PER_SITE - 2,
+      remaining: MAX_ARTICLES_PER_SITE - 3,
     });
     expect(fetched).toEqual([`${ORIGIN}/sitemap.xml`]);
   });
@@ -182,8 +186,8 @@ describe("POST /api/v1/sites/:id/articles/sitemap", () => {
 describe("POST /api/v1/sites/:id/articles/import", () => {
   it("creates the articles, reports the existing and failed ones in the order of the request", async () => {
     const site = await createSite({ url: ORIGIN });
-    await newArticle(site.id, { url: `${ORIGIN}/exists` });
-    await newArticle(site.id, { url: `${ORIGIN}/moved-target` });
+    await newArticle(site.id, { url: `${ORIGIN}/exists`, published_on: "2026-01-01" });
+    await newArticle(site.id, { url: `${ORIGIN}/moved-target`, published_on: "2026-01-01" });
     pages[`${ORIGIN}/a`] = html(
       `<html><head><meta property="og:title" content="Post A"><title>ignored</title>
 <script type="application/ld+json">{"datePublished":"2026-10-01T09:00:00+09:00"}</script></head></html>`,
@@ -254,6 +258,46 @@ describe("POST /api/v1/sites/:id/articles/import", () => {
       await post(`/api/v1/sites/${site.id}/articles/import`, { urls: [`${ORIGIN}/a`, `${ORIGIN}/alias`] })
     ).json()) as ImportArticlesResponse;
     expect(results.map((r) => r.status)).toEqual(["created", "exists"]);
+  });
+
+  it("fills the published date of registered articles that have none", async () => {
+    const site = await createSite({ url: ORIGIN });
+    const undated = await newArticle(site.id, { url: `${ORIGIN}/undated`, title: "Kept", tags: ["t"] });
+    await newArticle(site.id, { url: `${ORIGIN}/no-date` });
+    await newArticle(site.id, { url: `${ORIGIN}/target` });
+    // At the limit: filling a date takes no room.
+    await fillArticles(site.id, MAX_ARTICLES_PER_SITE - 3);
+    pages[`${ORIGIN}/new`] = html("<title>New</title>");
+    pages[`${ORIGIN}/undated`] = html(
+      `<title>New title</title><article><h1>A</h1><time datetime="2026-11-04T20:00:00Z">11/5</time></article>`,
+    );
+    pages[`${ORIGIN}/no-date`] = html("<title>No date</title>");
+    pages[`${ORIGIN}/alias`] = () => new Response(null, { status: 301, headers: { Location: `${ORIGIN}/target` } });
+    pages[`${ORIGIN}/target`] = html(`<meta property="article:published_time" content="2026-09-01">`);
+    const { results } = (await (
+      await post(`/api/v1/sites/${site.id}/articles/import`, {
+        urls: [`${ORIGIN}/undated`, `${ORIGIN}/no-date`, `${ORIGIN}/alias`, `${ORIGIN}/missing`, `${ORIGIN}/new`],
+      })
+    ).json()) as ImportArticlesResponse;
+    expect(results.map((r) => [r.url, r.status, r.status === "failed" ? r.error : undefined])).toEqual([
+      [`${ORIGIN}/undated`, "dated", undefined],
+      [`${ORIGIN}/no-date`, "failed", "公開日を読み取れませんでした"],
+      // The page redirects to a registered article without a date.
+      [`${ORIGIN}/alias`, "dated", undefined],
+      [`${ORIGIN}/missing`, "failed", "ページを取得できませんでした（HTTP 404）"],
+      // A new article still needs room.
+      [`${ORIGIN}/new`, "failed", "記事は 1 サイトにつき 1000 件まで登録できます"],
+    ]);
+    const first = results[0];
+    // Only the date changes: the UTC time is a date in Japan time, and the title and the tags are kept.
+    expect(first?.status === "dated" && [first.article.id, first.article.title, first.article.published_on, first.article.tags]).toEqual([
+      undated.id,
+      "Kept",
+      "2026-11-05",
+      ["t"],
+    ]);
+    const third = results[2];
+    expect(third?.status === "dated" && [third.article.url, third.article.published_on]).toEqual([`${ORIGIN}/target`, "2026-09-01"]);
   });
 
   it("fails the URLs from the one that reaches the article limit", async () => {

@@ -40,6 +40,7 @@ export const importMessages = {
   charset: "UTF-8 以外の文字コードのページは取り込めません",
   limit: `記事は 1 サイトにつき ${MAX_ARTICLES_PER_SITE} 件まで登録できます`,
   budget: "一度に取得できる数を超えました。もう一度取り込んでください",
+  noDate: "公開日を読み取れませんでした",
 } as const;
 
 export function pageHttpMessage(status: number): string {
@@ -651,26 +652,61 @@ function jsonLdDatePublished(html: string): string | null {
 
 // The publication date of a page (YYYY-MM-DD): article:published_time, then the datePublished of JSON-LD, then a
 // <meta> or <time> with itemprop="datePublished". null when none is a date.
+const JAPAN_OFFSET_MS = 9 * 60 * 60 * 1000;
+const UTC_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]00:?00)$/i;
+
+// The published date of a date or a date and time. A time in UTC is moved to Japan time (UTC+9), since the screens
+// and their users are in Japanese and sites often write their times in UTC: 2026-11-04T20:00:00Z is 2026-11-05. A
+// time with another offset keeps the written date, which is already local to the site.
+export function publishedDate(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  // Date.parse would roll an invalid date such as February 30 over to March.
+  if (leadingDate(trimmed) === null) return null;
+  if (UTC_DATE_TIME.test(trimmed)) {
+    const time = Date.parse(trimmed);
+    if (!Number.isNaN(time)) return new Date(time + JAPAN_OFFSET_MS).toISOString().slice(0, 10);
+  }
+  return leadingDate(trimmed);
+}
+
+// The first <time datetime> in the first <article> of the page, or null. Sites without the metadata of the published
+// date often show it there; the <time> elements outside the article are often the dates of other articles.
+function articleTimeDate(html: string): string | null {
+  const open = /<article\b[^>]*>/i.exec(html);
+  if (open === null) return null;
+  const rest = html.slice(open.index + open[0].length);
+  const close = rest.search(/<\/article\s*>/i);
+  const body = close === -1 ? rest : rest.slice(0, close);
+  for (const time of tagsOf(body, "time")) {
+    const date = publishedDate(time.datetime);
+    if (date !== null) return date;
+  }
+  return null;
+}
+
+// The published date of a page: article:published_time, then datePublished of JSON-LD, of a <meta itemprop> and of a
+// <time itemprop>, then the first <time datetime> in the <article>. null when none is found.
 export function extractPublishedOn(html: string): string | null {
   const metas = tagsOf(html, "meta");
   for (const meta of metas) {
     if (!attributeIs(meta, "property", "article:published_time")) continue;
-    const date = leadingDate(meta.content);
+    const date = publishedDate(meta.content);
     if (date !== null) return date;
   }
-  const jsonLd = leadingDate(jsonLdDatePublished(html));
+  const jsonLd = publishedDate(jsonLdDatePublished(html));
   if (jsonLd !== null) return jsonLd;
   for (const meta of metas) {
     if (!attributeIs(meta, "itemprop", "datepublished")) continue;
-    const date = leadingDate(meta.content);
+    const date = publishedDate(meta.content);
     if (date !== null) return date;
   }
   for (const time of tagsOf(html, "time")) {
     if (!attributeIs(time, "itemprop", "datepublished")) continue;
-    const date = leadingDate(time.datetime);
+    const date = publishedDate(time.datetime);
     if (date !== null) return date;
   }
-  return null;
+  return articleTimeDate(html);
 }
 
 export type PageResult = { ok: true; url: string; title: string; publishedOn: string | null } | { ok: false; error: string };

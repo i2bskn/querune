@@ -318,7 +318,7 @@
 ```json
 {
   "sitemap_url": "https://example.com/sitemap.xml",
-  "urls": [{ "url": "https://example.com/posts/a", "lastmod": "2026-10-01", "registered": false }],
+  "urls": [{ "url": "https://example.com/posts/a", "lastmod": "2026-10-01", "registered": false, "undated": false }],
   "truncated": false,
   "skipped_urls": 0,
   "skipped_sitemaps": 0,
@@ -326,7 +326,7 @@
 }
 ```
 
-- `registered`は、同じ`url`の記事が登録済みなら`true`です。
+- `registered`は、同じ`url`の記事が登録済みなら`true`です。`undated`は、その記事に公開日がなければ`true`です。
 - `remaining`は、あと登録できる記事の件数です（URLのない記事も数えます）。
 
 `POST /api/v1/sites/:id/articles/import`は、`urls`に指定したページ（1〜10件、サイトと同じorigin）を取得して記事を登録します。
@@ -334,9 +334,11 @@
 - ページは同時に5本まで取得し、先頭256 KBだけを読みます。同じoriginの中のリダイレクトは2回まで追い、記事の`url`にはリダイレクト後のURLを使います。
 - タイトルは`og:title`・`<title>`の順に読みます。どちらもなければURLのパスの最後の区切りを使い、それもなければホスト名にします。200文字を超える分は切ります。
 - タイトルの後ろに付いたサイト名は外します。最後の`|`（`｜`）の後ろが40文字以内ならその部分を外し、` - `・` – `・` — `・` · `の後ろは`og:site_name`で始まる場合だけ外します。
-- 公開日は`article:published_time`・JSON-LDの`datePublished`・`itemprop="datePublished"`の`<meta>`と`<time>`の順に読みます。サイトマップの`lastmod`は使いません。
-- タグは空、備考は空文字で登録します。登録済みの記事は変更しません。
-- `results`はリクエストの順（重複を除いた後）で、`status`は`created`（`article`に`ArticleSummary`）・`exists`（同じURLの記事が登録済み）・`failed`（`error`に理由）のどれかです。
+- 公開日は`article:published_time`・JSON-LDの`datePublished`・`itemprop="datePublished"`の`<meta>`と`<time>`の順に読みます。どれもなければ、最初の`<article>`の中で最初の`<time datetime>`を使います。サイトマップの`lastmod`は使いません。
+- 時刻がUTC（`Z`か`+00:00`）なら日本時間の日付にします（`2026-11-04T20:00:00Z`は`2026-11-05`）。ほかのオフセットの時刻は書かれた日付のままです。
+- タグは空、備考は空文字で登録します。
+- 登録済みで公開日のない記事は、ページから読んだ公開日だけを設定します（`dated`）。読めなければ`failed`になり、タイトルなどほかの項目は変えません。公開日のある登録済みの記事はページを取得しません。
+- `results`はリクエストの順（重複を除いた後）で、`status`は`created`（`article`に`ArticleSummary`）・`dated`（公開日を設定した記事。`article`に`ArticleSummary`）・`exists`（同じURLの記事が登録済み）・`failed`（`error`に理由）のどれかです。
 - ページの取得に失敗したURL（HTTPのエラー・応答なし・HTMLでない・UTF-8以外の文字コード・サイトの外へのリダイレクト）は`failed`になり、ほかのURLは続けて登録します。
 - 記事の上限に達したら、そのURLと以降の未登録のURLは`failed`になります。
 

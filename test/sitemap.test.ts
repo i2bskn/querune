@@ -4,6 +4,7 @@ import {
   extractTitle,
   importMessages,
   MAX_SITEMAP_URLS,
+  publishedDate,
   readPage,
   readSitemap,
   rootElementName,
@@ -370,6 +371,40 @@ describe("extractPublishedOn", () => {
 
   it("returns null without a date", () => {
     expect(extractPublishedOn(`<meta property="article:published_time" content="yesterday"><time>today</time>`)).toBeNull();
+  });
+
+  it("falls back to the first <time datetime> in the <article>", () => {
+    expect(
+      extractPublishedOn(`<header><time datetime="2026-01-01">nav</time></header>
+<main><ARTICLE class="post"><h1>A</h1><time dateTime="2026-11-05T05:13:29.689Z">2026/11/05</time>
+<time datetime="2026-11-06">updated</time></ARTICLE>
+<aside><time datetime="2026-11-08T10:28:22Z">other</time></aside></main>`),
+    ).toBe("2026-11-05");
+    // The <time> elements outside the article are the dates of other things.
+    expect(extractPublishedOn(`<article><p>No date</p></article><time datetime="2026-11-08">other</time>`)).toBeNull();
+    expect(extractPublishedOn(`<time datetime="2026-11-08">no article</time>`)).toBeNull();
+    // The metadata comes first.
+    expect(
+      extractPublishedOn(`<meta itemprop="datePublished" content="2026-10-04"><article><time datetime="2026-11-05"></time></article>`),
+    ).toBe("2026-10-04");
+  });
+});
+
+describe("publishedDate", () => {
+  it("moves a time in UTC to the date in Japan time", () => {
+    expect(publishedDate("2026-11-04T20:00:00Z")).toBe("2026-11-05");
+    expect(publishedDate("2026-11-04T14:59:59.999Z")).toBe("2026-11-04");
+    expect(publishedDate("2026-11-04T15:00:00+00:00")).toBe("2026-11-05");
+    expect(publishedDate("2026-12-31T16:00Z")).toBe("2027-01-01");
+  });
+
+  it("keeps the written date of other offsets, dates and local times", () => {
+    expect(publishedDate("2026-11-04T23:00:00-08:00")).toBe("2026-11-04");
+    expect(publishedDate("2026-11-04T01:00:00+09:00")).toBe("2026-11-04");
+    expect(publishedDate("2026-11-04")).toBe("2026-11-04");
+    expect(publishedDate("2026-11-04T23:00")).toBe("2026-11-04");
+    expect(publishedDate("2026-02-30T23:00:00Z")).toBeNull();
+    expect(publishedDate(undefined)).toBeNull();
   });
 });
 

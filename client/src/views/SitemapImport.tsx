@@ -139,6 +139,7 @@ export function SitemapImport({
       >
         <h2 className="panel-title">サイトマップから取り込む</h2>
         <p className="hint">サイトマップの URL を読み、選んだページのタイトルと公開日を記事に登録します。</p>
+        <p className="hint">登録済みで公開日が空の記事は、選ぶと公開日だけを補います。</p>
         <label className="field">
           <span className="field-label">サイトマップの URL</span>
           <input
@@ -208,14 +209,18 @@ export function SitemapImport({
   const all = [...results.values()];
   const failed = all.filter((item): item is Extract<ImportArticleResult, { status: "failed" }> => item.status === "failed");
   const createdCount = all.filter((item) => item.status === "created").length;
+  const datedCount = all.filter((item) => item.status === "dated").length;
   const existsCount = all.filter((item) => item.status === "exists").length;
   const unsent = progress.total - progress.done;
-  const retryOverLimit = failed.length > remaining;
+  // Only the URLs without an article take room; the registered ones only get their date.
+  const registered = new Set(sitemap.urls.filter((item) => item.registered).map((item) => item.url));
+  const retryOverLimit = failed.filter((item) => !registered.has(item.url)).length > remaining;
   return (
     <section className="panel form sitemap-import" aria-label="サイトマップから取り込む">
       <h2 className="panel-title">取り込みの結果</h2>
       <p className="sitemap-summary" role="status">
-        登録 {formatCount(createdCount)} 件・登録済み {formatCount(existsCount)} 件・失敗 {formatCount(failed.length)} 件
+        登録 {formatCount(createdCount)} 件・公開日を補った記事 {formatCount(datedCount)} 件・登録済み{" "}
+        {formatCount(existsCount)} 件・失敗 {formatCount(failed.length)} 件
       </p>
       {runError !== null && (
         <p className="form-error" role="alert">
@@ -288,14 +293,24 @@ function ChooseUrls({
   onBack: () => void;
 }) {
   const rows = useMemo(
-    () => sitemap.urls.map((item) => ({ ...item, label: shortUrl(item.url, site.url), key: filterKey(item.url, site.url) })),
+    () =>
+      sitemap.urls.map((item) => ({
+        ...item,
+        label: shortUrl(item.url, site.url),
+        key: filterKey(item.url, site.url),
+        // A registered article is chosen only to fill its missing published date.
+        selectable: !item.registered || item.undated,
+      })),
     [sitemap, site.url],
   );
   const needle = filter.trim().toLowerCase();
-  const matched = rows.filter((row) => (showRegistered || !row.registered) && (needle === "" || row.key.includes(needle)));
+  const matched = rows.filter((row) => (showRegistered || row.selectable) && (needle === "" || row.key.includes(needle)));
   const drawn = matched.slice(0, MAX_ROWS);
   const unregistered = sitemap.urls.filter((item) => !item.registered).length;
-  const overLimit = selected.size > remaining;
+  const undated = sitemap.urls.filter((item) => item.undated).length;
+  // Only the URLs without an article take room.
+  const newSelected = rows.filter((row) => !row.registered && selected.has(row.url)).length;
+  const overLimit = newSelected > remaining;
   const skipped: string[] = [];
   if (sitemap.skipped_sitemaps > 0) skipped.push(`読めなかったサイトマップ ${formatCount(sitemap.skipped_sitemaps)} 件`);
   if (sitemap.skipped_urls > 0) skipped.push(`対象外の URL ${formatCount(sitemap.skipped_urls)} 件`);
@@ -309,7 +324,7 @@ function ChooseUrls({
 
   function selectMatched() {
     const next = new Set(selected);
-    for (const row of matched) if (!row.registered) next.add(row.url);
+    for (const row of matched) if (row.selectable) next.add(row.url);
     onSelectedChange(next);
   }
 
@@ -320,6 +335,7 @@ function ChooseUrls({
         <p>
           {formatCount(sitemap.urls.length)} 件の URL のうち、未登録は {formatCount(unregistered)} 件
         </p>
+        {undated > 0 && <p className="hint">公開日が空の登録済みの記事が {formatCount(undated)} 件あります</p>}
         {sitemap.truncated && <p className="hint">先頭の 5000 件だけを表示しています</p>}
         {skipped.length > 0 && <p className="hint">{skipped.join("・")}を除きました</p>}
       </div>
@@ -344,7 +360,7 @@ function ChooseUrls({
         </label>
       </div>
       <div className="form-actions">
-        <button type="button" onClick={selectMatched} disabled={matched.every((row) => row.registered)}>
+        <button type="button" onClick={selectMatched} disabled={matched.every((row) => !row.selectable)}>
           絞り込んだ結果をすべて選ぶ
         </button>
         <button type="button" onClick={() => onSelectedChange(new Set())} disabled={selected.size === 0}>
@@ -360,14 +376,14 @@ function ChooseUrls({
               <label className="sitemap-row">
                 <input
                   type="checkbox"
-                  checked={!row.registered && selected.has(row.url)}
-                  disabled={row.registered}
+                  checked={row.selectable && selected.has(row.url)}
+                  disabled={!row.selectable}
                   onChange={(event) => toggle(row.url, event.target.checked)}
                 />
                 <span className="sitemap-url mono" title={row.url}>
                   {row.label}
                 </span>
-                {row.registered && <span className="tag">登録済み</span>}
+                {row.registered && <span className="tag">{row.undated ? "公開日なし" : "登録済み"}</span>}
                 {row.lastmod !== null && <span className="sitemap-date">{formatDate(row.lastmod)}</span>}
               </label>
             </li>

@@ -137,8 +137,8 @@ export type UpdateArticleRequest = Partial<CreateArticleRequest>;
 export type ReadSitemapRequest = { sitemap_url?: string | null };
 
 // A URL of the sitemap. lastmod is the date written in the sitemap (YYYY-MM-DD); registered is true when the site has
-// an article with this URL.
-export type SitemapUrl = { url: string; lastmod: string | null; registered: boolean };
+// an article with this URL, and undated when that article has no published date (importing it again fills the date).
+export type SitemapUrl = { url: string; lastmod: string | null; registered: boolean; undated: boolean };
 
 // The URLs of the site in the order of the sitemap, at most 5000 (truncated is true when more were found).
 // skipped_urls counts the URLs that are invalid or on another origin, skipped_sitemaps the child sitemaps that were
@@ -155,9 +155,11 @@ export type ReadSitemapResponse = {
 // POST /api/v1/sites/:id/articles/import: 1 to 10 URLs of the site.
 export type ImportArticlesRequest = { urls: string[] };
 
-// url is the URL of the request; article.url is the URL after the redirects of the page.
+// url is the URL of the request; article.url is the URL after the redirects of the page. dated: a registered article
+// without a published date got the date read from the page; nothing else of it changes.
 export type ImportArticleResult =
   | { url: string; status: "created"; article: ArticleSummary }
+  | { url: string; status: "dated"; article: ArticleSummary }
   | { url: string; status: "exists" }
   | { url: string; status: "failed"; error: string };
 
