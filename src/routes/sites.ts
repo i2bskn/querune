@@ -398,7 +398,8 @@ const sitesApi = new Hono<AppEnv>()
     }
     let queued;
     try {
-      queued = await enqueueSync(db.$client, c.env.SYNC_QUEUE, candidates, { now, force: true });
+      // A manual import accepts a day without rows, which the daily imports keep the earlier rows of.
+      queued = await enqueueSync(db.$client, c.env.SYNC_QUEUE, candidates, { now, force: true, acceptEmpty: true });
     } catch (error) {
       if (!(error instanceof EnqueueError)) throw error;
       console.error("enqueueing the import failed", { siteId: site.id, sent: error.sent, ...describeError(error.cause) });
@@ -417,7 +418,7 @@ const sitesApi = new Hono<AppEnv>()
     const db = c.get("db");
     const site = SITE_ID_PATTERN.test(id) ? await findSite(db, id) : undefined;
     if (!site) return apiError(c, 404, "not_found", siteNotFound);
-    return c.json(await getSyncStatus(db.$client, propertiesOf(site)), 200);
+    return c.json(await getSyncStatus(db.$client, propertiesOf(site), clock.now()), 200);
   })
   .get("/:id/insights", insightsQuery, async (c) => {
     const id = c.req.param("id");

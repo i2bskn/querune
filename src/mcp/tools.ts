@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import type { Db } from "@i2bskn/workers-app-core";
+import { clock, type Db } from "@i2bskn/workers-app-core";
 import { sites, type SiteRow, type UserRow } from "../db/schema";
 import { SITE_ID_PATTERN } from "../ids";
 import { listSites } from "../routes/sites";
@@ -40,6 +40,12 @@ const compareDateMessage = "group_by が date のときは比較できません"
 const MAX_DAYS = 400;
 const MAX_QUERY_DAYS = 100;
 const truncatedNote = "行数の上限で一部だけを取り込んだ日があります。";
+const provisionalNote = "速報値の日（provisional_dates）は今後変わることがあります。";
+const ga4EstimateNote = "GA4 の確定は API で判定できないため、経過日数による推定です。";
+
+function hasProvisional(coverage: { current: Coverage; previous: Coverage | null }): boolean {
+  return coverage.current.provisional_days > 0 || (coverage.previous?.provisional_days ?? 0) > 0;
+}
 
 const siteIdArg = z.string().describe("サイトの ID（list_sites の id）");
 const dateArg = (description: string) => z.string().describe(`${description}（YYYY-MM-DD）`);
@@ -213,7 +219,15 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     {
       title: "Get sync status",
       description:
-        "サイトの Search Console・GA4 の取り込み状況を返します。データセット（gsc_pages、gsc_queries、ga4_landing_pages）ごとに、今のプロパティ、取得済みの最新の日、速報値の開始日、取得済みの日数、打ち切りの日数、待ち・実行中・失敗の日数と最近の失敗を返します。集計の値が少ないときは、成果の悪化と判断する前に取り込みの状況を確認してください。" +
+        "サイトの Search Console・GA4 の取り込み状況を返します。データセット（gsc_pages、gsc_queries、ga4_landing_pages）ごとに、今のプロパティ、取得済みの最新の日、速報値の開始日、取得済みの日数、打ち切りの日数、待ち・実行中・失敗の日数と最近の失敗を返します。" +
+        "あわせて日付のタイムゾーン（time_zone・time_zone_known）・期待される最新日（expected_latest_date）・確定の判定根拠（state_basis）・毎日取り直す日数（refresh_days）を返します。" +
+        "recent_days は期待される最新日から遡る14日の状態（final・provisional・pending・failed・missing）で、final_through はそのうち確定が途切れずに続く最後の日です。" +
+        "サイト全体の final_through はデータセットごとの値の最小で、各値はそれぞれのタイムゾーンの日付です。" +
+        "Search Console は API が未確定とした日を速報値にします（行のない日は経過日数で推定）。GA4 の確定は経過日数による推定で API の保証ではありません。" +
+        "週・月などの期間を比べるときは、データセットごとの最新日が違っても final_through 以前の同じ完了した期間を使ってください。" +
+        "final_through は直近14日だけで決まるため、期間全体の完了は集計ツールの coverage で確かめてください。" +
+        "より新しい日を含めるなら暫定として扱い、coverage の provisional_dates・missing_dates を明示してください。" +
+        "集計の値が少ないときは、成果の悪化と判断する前に取り込みの状況を確認してください。" +
         UNTRUSTED_DATA_NOTE,
       inputSchema: getSyncStatusInput,
       annotations: readOnlyAnnotations,
@@ -223,11 +237,11 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         const site = await findSite(db, args.site_id);
         if (!site) return toolError("not_found", siteNotFound);
         return ok(
-          await getSyncStatus(db.$client, {
-            id: site.id,
-            gscProperty: site.gscProperty,
-            ga4PropertyId: site.ga4PropertyId,
-          }),
+          await getSyncStatus(
+            db.$client,
+            { id: site.id, gscProperty: site.gscProperty, ga4PropertyId: site.ga4PropertyId },
+            clock.now(),
+          ),
         );
       }),
   );
@@ -237,7 +251,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     {
       title: "Query search performance",
       description:
-        "取り込んだ Search Console の実績を、ページ・クエリ・ページとクエリ・日付ごとに集計して返します。期間は開始日と終了日を含み、Search Console の日付（太平洋時間）です。ctr は合計クリック数 ÷ 合計表示回数、position は表示回数で重み付けした平均掲載順位です。比較する期間を指定すると、各行と合計に previous を付けます。coverage に期間内の取得済み・速報値・未取得の日を返すので、未取得の日を成果の悪化と取り違えないでください。期間は 400 日まで、group_by が query・page_query のときは 100 日までです。" +
+        "取り込んだ Search Console の実績を、ページ・クエリ・ページとクエリ・日付ごとに集計して返します。期間は開始日と終了日を含み、Search Console の日付（太平洋時間）です。ctr は合計クリック数 ÷ 合計表示回数、position は表示回数で重み付けした平均掲載順位です。比較する期間を指定すると、各行と合計に previous を付けます。coverage に期間内の取得済み・速報値・未取得の日を返すので、未取得の日を成果の悪化と取り違えないでください。速報値の日は coverage の provisional_dates に返します。期間は 400 日まで、group_by が query・page_query のときは 100 日までです。" +
         UNTRUSTED_DATA_NOTE,
       inputSchema: searchPerformanceInput,
       annotations: readOnlyAnnotations,
@@ -295,6 +309,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         const compared = periods.previous !== null;
         const notes = ["Search Console の日付は太平洋時間です。"];
         if (byQuery) notes.push("クエリ別の値には匿名化されたクエリが含まれないため、ページ別の合計と一致しません。");
+        if (hasProvisional(coverage)) notes.push(provisionalNote);
         if (coverage.current.truncated_days > 0 || (coverage.previous?.truncated_days ?? 0) > 0) notes.push(truncatedNote);
         return ok({
           site_id: site.id,
@@ -324,7 +339,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     {
       title: "Query landing sessions",
       description:
-        "取り込んだ GA4 のセッションを、ランディングページ・チャネル（セッションのデフォルト チャネル グループ）・ランディングページとチャネル・日付ごとに集計して返します。期間は開始日と終了日を含み、GA4 のプロパティのタイムゾーンの日付です。key_events は GA4 でキーイベントに設定したイベントの数です。比較する期間を指定すると、各行と合計に previous を付けます。coverage に期間内の取得済み・速報値・未取得の日を返します。期間は 400 日までです。" +
+        "取り込んだ GA4 のセッションを、ランディングページ・チャネル（セッションのデフォルト チャネル グループ）・ランディングページとチャネル・日付ごとに集計して返します。期間は開始日と終了日を含み、GA4 のプロパティのタイムゾーンの日付です。key_events は GA4 でキーイベントに設定したイベントの数です。比較する期間を指定すると、各行と合計に previous を付けます。coverage に期間内の取得済み・速報値・未取得の日を返します。速報値の日は coverage の provisional_dates に返します。期間は 400 日までです。" +
         UNTRUSTED_DATA_NOTE,
       inputSchema: landingSessionsInput,
       annotations: readOnlyAnnotations,
@@ -376,7 +391,9 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         const notes = [
           "GA4 の日付はプロパティのタイムゾーンです。",
           "key_events は GA4 でキーイベントに設定したイベントの数で、問い合わせや受注の件数と同じとは限りません。",
+          ga4EstimateNote,
         ];
+        if (hasProvisional(coverage)) notes.push(provisionalNote);
         if (coverage.current.truncated_days > 0 || (coverage.previous?.truncated_days ?? 0) > 0) notes.push(truncatedNote);
         return ok({
           site_id: site.id,

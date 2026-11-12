@@ -83,6 +83,7 @@
       { "queue": "querune-sync-dlq", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 10 }
     ]
   },
-  // The daily import (src/sync/enqueue.ts), at 18:00 UTC.
-  "triggers": { "crons": ["0 18 * * *"] }
+  // The imports (src/sync/enqueue.ts): 18:00 UTC is the full import (DAILY_CRON), 6:00 UTC the import of the recent
+  // days that are not final (FRESH_CRON). Keep in sync with the constants there.
+  "triggers": { "crons": ["0 18 * * *", "0 6 * * *"] }
 }

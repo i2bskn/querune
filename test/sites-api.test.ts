@@ -4,10 +4,12 @@ import type { Site, SyncStatus } from "../src/api/types";
 import type { UserRow } from "../src/db/schema";
 import { newSiteId } from "../src/ids";
 import { addDays, subtractMonths, todayUtc } from "../src/sync/dates";
+import { getSyncStatus } from "../src/sync/status";
 import {
   countTable,
   createSite,
   createUser,
+  d1Counting,
   dbChangingBefore,
   fakeQueue,
   login,
@@ -452,6 +454,8 @@ describe("POST /api/v1/sites/:id/sync", () => {
     expect(queue.messages).toContainEqual(
       expect.objectContaining({ kind: "sync", siteId: site.id, dataset: "ga4_landing_pages", date: start, property: GA4, offset: 0 }),
     );
+    // A manual import accepts a day without rows.
+    expect(queue.messages.every((m) => m.kind === "sync" && m.acceptEmpty === true)).toBe(true);
     expect(await countTable("sync_days")).toBe(9);
   });
 
@@ -600,6 +604,14 @@ describe("GET /api/v1/sites/:id/sync", () => {
             { date: "2026-10-05", error_code: "invalid_request", error_message: "bad", finished_at: 600 },
             { date: "2026-10-04", error_code: "permission_denied", error_message: "denied", finished_at: 500 },
           ],
+          time_zone: "America/Los_Angeles",
+          time_zone_known: true,
+          expected_latest_date: expect.any(String),
+          state_basis: "api",
+          refresh_days: 7,
+          recent_days: expect.any(Array),
+          // The days of October are not among the recent days.
+          final_through: null,
         },
         {
           dataset: "gsc_queries",
@@ -614,6 +626,13 @@ describe("GET /api/v1/sites/:id/sync", () => {
           running: 0,
           failed: 1,
           recent_failures: [{ date: "2026-10-01", error_code: null, error_message: null, finished_at: 1 }],
+          time_zone: "America/Los_Angeles",
+          time_zone_known: true,
+          expected_latest_date: expect.any(String),
+          state_basis: "api",
+          refresh_days: 7,
+          recent_days: expect.any(Array),
+          final_through: null,
         },
         {
           dataset: "ga4_landing_pages",
@@ -628,9 +647,18 @@ describe("GET /api/v1/sites/:id/sync", () => {
           running: 0,
           failed: 0,
           recent_failures: [],
+          time_zone: null,
+          time_zone_known: false,
+          expected_latest_date: null,
+          state_basis: null,
+          refresh_days: 0,
+          recent_days: [],
+          final_through: null,
         },
       ],
+      final_through: null,
     });
+    expect(body.datasets[0]?.recent_days).toHaveLength(14);
   });
 
   it("returns at most 10 recent failures, newest first", async () => {
@@ -641,6 +669,97 @@ describe("GET /api/v1/sites/:id/sync", () => {
     const body = (await (await send(`/api/v1/sites/${site.id}/sync`, { cookies: memberCookies })).json()) as SyncStatus;
     expect(body.datasets[0]?.failed).toBe(12);
     expect(body.datasets[0]?.recent_failures.map((f) => f.finished_at)).toEqual([12, 11, 10, 9, 8, 7, 6, 5, 4, 3]);
+  });
+});
+
+describe("getSyncStatus", () => {
+  // 2026-11-12 06:00 UTC: 2026-11-11 22:00 in Los Angeles, 2026-11-12 15:00 in Tokyo, 2026-11-11 18:00 in Etc/GMT+12.
+  const NOW = Date.UTC(2026, 10, 12, 6, 0, 0);
+
+  async function insertDays(siteId: string, dates: string[], row: Record<string, unknown>): Promise<void> {
+    for (const date of dates) {
+      await insertDay(siteId, { date, last_succeeded_at: 100, last_data_state: "final", last_row_count: 5, ...row });
+    }
+  }
+
+  function datesFrom(start: string, count: number): string[] {
+    return Array.from({ length: count }, (_, i) => addDays(start, i));
+  }
+
+  it("returns the state of each of the recent days", async () => {
+    const site = await createSite({ gscProperty: GSC });
+    await insertDay(site.id, { date: "2026-10-28", last_succeeded_at: 100, last_data_state: "final", last_row_count: 5 });
+    await insertDay(site.id, { date: "2026-10-29", last_succeeded_at: 100, last_data_state: "provisional", last_row_count: 4 });
+    await insertDay(site.id, { date: "2026-10-30", status: "queued" });
+    await insertDay(site.id, { date: "2026-10-31", status: "failed", error_code: "permission_denied" });
+    await insertDay(site.id, { date: "2026-11-01", status: "running", last_succeeded_at: 200, last_data_state: "final", last_row_count: 3 });
+    await insertDay(site.id, { date: "2026-11-02", status: "failed", error_code: "empty_response", last_succeeded_at: 300, last_data_state: "provisional", last_row_count: 2 });
+    // Another property.
+    await insertDay(site.id, { date: "2026-11-03", property: "sc-domain:old.example.com", last_succeeded_at: 100, last_data_state: "final" });
+    const status = await getSyncStatus(env.DB, { id: site.id, gscProperty: GSC, ga4PropertyId: null }, NOW);
+    const pages = status.datasets[0];
+    expect(pages?.expected_latest_date).toBe("2026-11-10");
+    expect(pages?.recent_days.map((d) => d.date)).toEqual(datesFrom("2026-10-28", 14));
+    expect(pages?.recent_days.slice(0, 7)).toEqual([
+      { date: "2026-10-28", state: "final", updating: false, row_count: 5, fetched_at: 100, error_code: null },
+      { date: "2026-10-29", state: "provisional", updating: false, row_count: 4, fetched_at: 100, error_code: null },
+      { date: "2026-10-30", state: "pending", updating: false, row_count: null, fetched_at: null, error_code: null },
+      { date: "2026-10-31", state: "failed", updating: false, row_count: null, fetched_at: null, error_code: "permission_denied" },
+      { date: "2026-11-01", state: "final", updating: true, row_count: 3, fetched_at: 200, error_code: null },
+      { date: "2026-11-02", state: "provisional", updating: false, row_count: 2, fetched_at: 300, error_code: "empty_response" },
+      { date: "2026-11-03", state: "missing", updating: false, row_count: null, fetched_at: null, error_code: null },
+    ]);
+    expect(pages?.final_through).toBe("2026-10-28");
+    // The first day is not final.
+    expect(status.datasets[1]?.final_through).toBeNull();
+    expect(status.final_through).toBeNull();
+  });
+
+  it("returns final_through of every dataset and the earliest of them, in their time zones", async () => {
+    const site = await createSite({ gscProperty: GSC, ga4PropertyId: GA4 });
+    await insertDays(site.id, datesFrom("2026-10-28", 14).filter((date) => date !== "2026-11-09"), {});
+    await insertDay(site.id, { date: "2026-11-09", last_succeeded_at: 100, last_data_state: "provisional" });
+    await insertDays(site.id, datesFrom("2026-10-28", 14), { dataset: "gsc_queries" });
+    await insertDays(site.id, datesFrom("2026-10-29", 10), { dataset: "ga4_landing_pages", property: GA4, last_time_zone: "Asia/Tokyo" });
+    await insertDay(site.id, { date: "2026-11-08", dataset: "ga4_landing_pages", property: GA4, status: "queued" });
+    const { d1, count } = d1Counting();
+    const status = await getSyncStatus(d1, { id: site.id, gscProperty: GSC, ga4PropertyId: GA4 }, NOW);
+    expect(count()).toBe(1);
+    const [pages, queries, ga4] = status.datasets;
+    expect(pages).toMatchObject({ expected_latest_date: "2026-11-10", final_through: "2026-11-08" });
+    expect(queries).toMatchObject({ expected_latest_date: "2026-11-10", final_through: "2026-11-10" });
+    expect(ga4).toMatchObject({
+      time_zone: "Asia/Tokyo",
+      time_zone_known: true,
+      expected_latest_date: "2026-11-11",
+      state_basis: "elapsed_days",
+      refresh_days: 10,
+      final_through: "2026-11-07",
+    });
+    expect(ga4?.recent_days[0]?.date).toBe("2026-10-29");
+    expect(status.final_through).toBe("2026-11-07");
+  });
+
+  it("uses yesterday in Etc/GMT+12 while the time zone of the GA4 property is not known", async () => {
+    const site = await createSite({ ga4PropertyId: GA4 });
+    // A time zone of another property, and a failed day with a time zone, are not used.
+    await insertDay(site.id, { date: "2026-10-01", dataset: "ga4_landing_pages", property: "999", last_succeeded_at: 1, last_time_zone: "Asia/Tokyo" });
+    await insertDay(site.id, { date: "2026-10-02", dataset: "ga4_landing_pages", property: GA4, status: "failed", last_time_zone: "Asia/Tokyo" });
+    const status = await getSyncStatus(env.DB, { id: site.id, gscProperty: null, ga4PropertyId: GA4 }, NOW);
+    expect(status.datasets[2]).toMatchObject({
+      configured: true,
+      time_zone: null,
+      time_zone_known: false,
+      expected_latest_date: "2026-11-10",
+      state_basis: "elapsed_days",
+    });
+    expect(status.datasets[0]).toMatchObject({ configured: false, expected_latest_date: null, recent_days: [], refresh_days: 0 });
+  });
+
+  it("returns null final_through without a configured dataset", async () => {
+    const site = await createSite();
+    const status = await getSyncStatus(env.DB, { id: site.id, gscProperty: null, ga4PropertyId: null }, NOW);
+    expect(status.final_through).toBeNull();
   });
 });
 

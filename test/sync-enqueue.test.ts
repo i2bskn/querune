@@ -9,6 +9,7 @@ import {
   QUEUE_RETENTION_MS,
   runDailySync,
   STALE_RUNNING_MS,
+  syncModeOf,
   type Dataset,
   type SyncCandidate,
 } from "../src/sync/enqueue";
@@ -60,12 +61,14 @@ async function insertDay(params: {
   heartbeatAt?: number | null;
   lastDataState?: "final" | "provisional" | null;
   siteId?: string;
+  timeZone?: string | null;
+  succeededAt?: number;
 }): Promise<void> {
   const succeeded = params.lastDataState !== undefined && params.lastDataState !== null;
   await env.DB.prepare(
     `INSERT INTO sync_days (site_id, dataset, date, property, status, run_id, queued_at, heartbeat_at,
       last_succeeded_at, last_data_state, last_row_count, last_truncated, last_time_zone)
-    VALUES (?, ?, ?, ?, ?, 'old-run', ?, ?, ?, ?, ?, 0, 'America/Los_Angeles')`,
+    VALUES (?, ?, ?, ?, ?, 'old-run', ?, ?, ?, ?, ?, 0, ?)`,
   )
     .bind(
       params.siteId ?? site.id,
@@ -75,9 +78,10 @@ async function insertDay(params: {
       params.status,
       params.queuedAt ?? NOW - HOUR,
       params.heartbeatAt ?? null,
-      succeeded ? NOW - 2 * HOUR : null,
+      succeeded ? (params.succeededAt ?? NOW - 2 * HOUR) : null,
       params.lastDataState ?? null,
       succeeded ? 42 : null,
+      params.timeZone === undefined ? "America/Los_Angeles" : params.timeZone,
     )
     .run();
 }
@@ -86,6 +90,10 @@ async function dayOf(date: string, dataset: Dataset = "gsc_pages"): Promise<DayR
   return env.DB.prepare("SELECT * FROM sync_days WHERE site_id = ? AND dataset = ? AND date = ?")
     .bind(site.id, dataset, date)
     .first<DayRow>();
+}
+
+function datesFrom(start: string, count: number): string[] {
+  return Array.from({ length: count }, (_, i) => addDays(start, i));
 }
 
 function candidate(date: string, dataset: Dataset = "gsc_pages", property = GSC): SyncCandidate {
@@ -189,6 +197,39 @@ describe("enqueueSync", () => {
     expect(queue.messages).toHaveLength(100);
   });
 
+  it("asks for a day given more than once once, with force if any of them has it", async () => {
+    await insertDay({ date: "2026-10-01", status: "succeeded", lastDataState: "final" });
+    await insertDay({ date: "2026-10-02", status: "succeeded", lastDataState: "final" });
+    await insertDay({ date: "2026-10-03", status: "succeeded", lastDataState: "final" });
+    const queued = await enqueueSync(
+      env.DB,
+      queue,
+      [
+        { ...candidate("2026-10-01"), force: true },
+        { ...candidate("2026-10-01"), force: false },
+        { ...candidate("2026-10-02"), force: false },
+        { ...candidate("2026-10-02"), force: true },
+        { ...candidate("2026-10-03"), force: false },
+        candidate("2026-10-03"),
+      ],
+      { now: NOW, force: false },
+    );
+    expect(queued.map((row) => row.date).sort()).toEqual(["2026-10-01", "2026-10-02"]);
+    expect(queue.messages).toHaveLength(2);
+  });
+
+  it("uses the force of the options for the candidates without one, and sets acceptEmpty", async () => {
+    await insertDay({ date: "2026-10-01", status: "succeeded", lastDataState: "final" });
+    await insertDay({ date: "2026-10-02", status: "succeeded", lastDataState: "final" });
+    const queued = await enqueueSync(env.DB, queue, [candidate("2026-10-01"), { ...candidate("2026-10-02"), force: false }], {
+      now: NOW,
+      force: true,
+      acceptEmpty: true,
+    });
+    expect(queued.map((row) => row.date)).toEqual(["2026-10-01"]);
+    expect(queue.messages).toEqual([expect.objectContaining({ date: "2026-10-01", acceptEmpty: true })]);
+  });
+
   it("does nothing without candidates", async () => {
     expect(await enqueueSync(env.DB, queue, [], { now: NOW, force: true })).toEqual([]);
     expect(queue.messages).toEqual([]);
@@ -213,16 +254,18 @@ describe("runDailySync", () => {
       .sort();
   }
 
-  it("imports the last 7 days of every dataset", async () => {
+  it("imports the recent days of every dataset", async () => {
     const gscOnly = await createSite({ gscProperty: "sc-domain:b.example.com" });
     await createSite();
     await run();
-    const recent = Array.from({ length: 7 }, (_, i) => addDays(TODAY, -7 + i));
-    expect(sentDays("gsc_pages")).toEqual(recent);
-    expect(sentDays("gsc_queries")).toEqual(recent);
-    expect(sentDays("ga4_landing_pages")).toEqual(recent);
+    // 2026-11-05 10:00 in Los Angeles. Without the time zone of the GA4 property, 2026-11-05 06:00 in Etc/GMT+12.
+    expect(sentDays("gsc_pages")).toEqual(datesFrom("2026-10-29", 7));
+    expect(sentDays("gsc_queries")).toEqual(datesFrom("2026-10-29", 7));
+    expect(sentDays("ga4_landing_pages")).toEqual(datesFrom("2026-10-26", 10));
     expect(queue.messages.filter((m) => m.kind === "sync" && m.siteId === gscOnly.id)).toHaveLength(14);
-    expect(queue.messages).toHaveLength(35);
+    expect(queue.messages).toHaveLength(38);
+    // Only the manual imports accept a day without rows.
+    expect(queue.messages.some((m) => m.kind === "sync" && m.acceptEmpty !== undefined)).toBe(false);
   });
 
   it("imports again the provisional, failed, stopped and expired days of the 30 days before", async () => {
@@ -237,12 +280,150 @@ describe("runDailySync", () => {
     await insertDay({ date: addDays(TODAY, -31), status: "failed" });
     // A day of another property is not imported again.
     await insertDay({ date: addDays(TODAY, -15), status: "failed", property: "sc-domain:old.example.com" });
+    // Today is not over in Los Angeles.
+    await insertDay({ date: TODAY, status: "failed" });
     await run();
-    const recent = Array.from({ length: 7 }, (_, i) => addDays(TODAY, -7 + i));
+    const recent = datesFrom(addDays(TODAY, -7), 7);
     expect(sentDays("gsc_pages")).toEqual(
       [addDays(TODAY, -30), addDays(TODAY, -13), addDays(TODAY, -11), addDays(TODAY, -10), addDays(TODAY, -8), ...recent].sort(),
     );
     expect(sentDays("gsc_queries")).toEqual(recent);
+  });
+
+  describe("full (18:00 UTC)", () => {
+    // 2026-11-11 18:00 UTC: 2026-11-12 03:00 in Tokyo, 2026-11-11 10:00 in Los Angeles.
+    const FULL_NOW = Date.UTC(2026, 10, 11, 18, 0, 0);
+
+    function runFull(now = FULL_NOW) {
+      return runDailySync({ db: env.DB, queue, now, serviceAccountKey: key, mode: "full" });
+    }
+
+    function ga4Day(date: string, extra: Partial<Parameters<typeof insertDay>[0]> = {}) {
+      return insertDay({ dataset: "ga4_landing_pages", property: GA4, date, status: "succeeded", lastDataState: "final", timeZone: "Asia/Tokyo", ...extra });
+    }
+
+    it("imports the final days of the recent days again", async () => {
+      await insertDay({ date: "2026-11-06", status: "succeeded", lastDataState: "final" });
+      await runFull();
+      expect(sentDays("gsc_pages")).toContain("2026-11-06");
+      expect(await dayOf("2026-11-06")).toMatchObject({ status: "queued", last_data_state: "final", last_row_count: 42 });
+    });
+
+    it("imports yesterday in the time zone of the GA4 property", async () => {
+      await ga4Day("2026-10-01");
+      await runFull();
+      expect(sentDays("ga4_landing_pages")).toContain("2026-11-11");
+    });
+
+    it("imports the 10 GA4 days and the 7 Search Console days to yesterday, and the retries before them", async () => {
+      await ga4Day("2026-10-01");
+      await ga4Day("2026-11-03");
+      await ga4Day("2026-11-04", { status: "queued", queuedAt: FULL_NOW - HOUR, lastDataState: null });
+      await ga4Day("2026-11-05", { status: "running", heartbeatAt: FULL_NOW - HOUR, lastDataState: null });
+      await ga4Day("2026-10-25", { status: "failed", lastDataState: null });
+      // Later than yesterday in Tokyo.
+      await ga4Day("2026-11-12", { status: "failed", lastDataState: null });
+      await insertDay({ date: "2026-11-05", status: "succeeded", lastDataState: "final" });
+      await insertDay({ date: "2026-10-20", status: "succeeded", lastDataState: "provisional" });
+      // Later than yesterday in Los Angeles.
+      await insertDay({ date: "2026-11-11", status: "failed" });
+      await runFull();
+      expect(sentDays("ga4_landing_pages")).toEqual(
+        ["2026-10-25", ...datesFrom("2026-11-02", 10).filter((d) => d !== "2026-11-04" && d !== "2026-11-05")].sort(),
+      );
+      expect(sentDays("gsc_pages")).toEqual(["2026-10-20", ...datesFrom("2026-11-04", 7)]);
+      expect(sentDays("gsc_queries")).toEqual(datesFrom("2026-11-04", 7));
+    });
+
+    it("imports GA4 to yesterday in Etc/GMT+12 until the time zone of the property is known", async () => {
+      // 2026-11-11 06:00 in Etc/GMT+12.
+      await runFull();
+      expect(sentDays("ga4_landing_pages")).toEqual(datesFrom("2026-11-01", 10));
+    });
+
+    it("uses the time zone of the latest successful import of the current property", async () => {
+      // 2026-11-12 06:00 UTC: 2026-11-11 22:00 in Los Angeles, 2026-11-12 15:00 in Tokyo.
+      const at = Date.UTC(2026, 10, 12, 6, 0, 0);
+      await ga4Day("2026-10-01", { timeZone: "Asia/Tokyo", succeededAt: at - 3 * HOUR });
+      await ga4Day("2026-10-02", { timeZone: "America/Los_Angeles", succeededAt: at - 2 * HOUR });
+      await runFull(at);
+      expect(sentDays("ga4_landing_pages").at(-1)).toBe("2026-11-10");
+
+      queue.messages.length = 0;
+      await env.DB.prepare("UPDATE sync_days SET last_succeeded_at = ? WHERE date = '2026-10-01' AND dataset = 'ga4_landing_pages'")
+        .bind(at - HOUR)
+        .run();
+      await runFull(at + 1);
+      expect(sentDays("ga4_landing_pages").at(-1)).toBe("2026-11-11");
+    });
+
+    it("does not use the time zone of another property", async () => {
+      await ga4Day("2026-10-01", { property: "999" });
+      await runFull();
+      expect(sentDays("ga4_landing_pages").at(-1)).toBe("2026-11-10");
+    });
+  });
+
+  describe("fresh (6:00 UTC)", () => {
+    // 2026-11-12 06:00 UTC: 2026-11-12 15:00 in Tokyo, 2026-11-11 22:00 in Los Angeles.
+    const FRESH_NOW = Date.UTC(2026, 10, 12, 6, 0, 0);
+
+    function runFresh(options: { serviceAccountKey: string | undefined } = { serviceAccountKey: key }) {
+      return runDailySync({ db: env.DB, queue, now: FRESH_NOW, serviceAccountKey: options.serviceAccountKey, mode: "fresh" });
+    }
+
+    it("imports the last 5 days that are not final, and nothing else", async () => {
+      await insertDay({ dataset: "ga4_landing_pages", property: GA4, date: "2026-10-01", status: "succeeded", lastDataState: "final", timeZone: "Asia/Tokyo" });
+      await insertDay({ dataset: "ga4_landing_pages", property: GA4, date: "2026-11-07", status: "succeeded", lastDataState: "final", timeZone: "Asia/Tokyo" });
+      await insertDay({ dataset: "ga4_landing_pages", property: GA4, date: "2026-11-08", status: "succeeded", lastDataState: "provisional", timeZone: "Asia/Tokyo" });
+      await insertDay({ dataset: "ga4_landing_pages", property: GA4, date: "2026-11-09", status: "failed", timeZone: "Asia/Tokyo" });
+      await insertDay({ date: "2026-11-06", status: "succeeded", lastDataState: "final" });
+      await insertDay({ date: "2026-11-07", status: "failed" });
+      // Out of the 5 days: not imported again by the fresh import.
+      await insertDay({ date: "2026-10-20", status: "failed" });
+      await insertDay({ date: "2026-10-21", status: "succeeded", lastDataState: "provisional" });
+      const purgeId = newUlid(FRESH_NOW);
+      await env.DB.prepare(
+        "INSERT INTO pending_purges (id, site_id, dataset, property, created_at, attempted_at) VALUES (?, ?, 'gsc_pages', NULL, ?, NULL)",
+      )
+        .bind(purgeId, site.id, FRESH_NOW - HOUR)
+        .run();
+      await runFresh();
+      expect(sentDays("ga4_landing_pages")).toEqual(["2026-11-08", "2026-11-09", "2026-11-10", "2026-11-11"]);
+      expect(sentDays("gsc_pages")).toEqual(["2026-11-07", "2026-11-08", "2026-11-09", "2026-11-10"]);
+      expect(sentDays("gsc_queries")).toEqual(datesFrom("2026-11-06", 5));
+      expect(queue.messages.filter((m) => m.kind === "purge")).toEqual([]);
+      expect(await env.DB.prepare("SELECT attempted_at FROM pending_purges").first()).toEqual({ attempted_at: null });
+    });
+
+    it("does nothing without a valid key", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      await env.DB.prepare(
+        "INSERT INTO pending_purges (id, site_id, dataset, property, created_at, attempted_at) VALUES (?, ?, 'gsc_pages', NULL, ?, NULL)",
+      )
+        .bind(newUlid(FRESH_NOW), site.id, FRESH_NOW - HOUR)
+        .run();
+      for (const value of [undefined, "{"]) {
+        await runFresh({ serviceAccountKey: value });
+        expect(queue.messages).toEqual([]);
+      }
+    });
+
+    it("makes 2 D1 queries with 100 sites", async () => {
+      for (let i = 0; i < 99; i++) await createSite({ gscProperty: `sc-domain:s${i}.example.com`, ga4PropertyId: `${1000 + i}` });
+      const { d1, count } = d1Counting();
+      await runDailySync({ db: d1, queue, now: FRESH_NOW, serviceAccountKey: key, mode: "fresh" });
+      // The sites and the time zones (one batch), and the imports (one batch).
+      expect(count()).toBe(2);
+      expect(queue.messages.length).toBe(100 * 15);
+    });
+  });
+
+  it("chooses the mode from the cron", () => {
+    expect(syncModeOf("0 6 * * *")).toBe("fresh");
+    expect(syncModeOf("0 18 * * *")).toBe("full");
+    expect(syncModeOf("*/5 * * * *")).toBe("full");
+    expect(syncModeOf("")).toBe("full");
   });
 
   it("does not ask for imports without a valid key, but sends the purges again", async () => {
@@ -304,16 +485,16 @@ describe("runDailySync", () => {
     await run();
     expect(error).toHaveBeenCalledWith("daily sync failed", expect.objectContaining({ name: "EnqueueError" }));
     expect(queue.messages).toEqual([{ kind: "purge", purgeId }]);
-    expect(await countTable("sync_days")).toBe(21);
+    expect(await countTable("sync_days")).toBe(24);
   });
 
-  it("makes at most 6 D1 queries with 100 sites", async () => {
+  it("makes 4 D1 queries with 100 sites", async () => {
     for (let i = 0; i < 99; i++) await createSite({ gscProperty: `sc-domain:s${i}.example.com`, ga4PropertyId: `${1000 + i}` });
     await insertDay({ date: addDays(TODAY, -10), status: "failed" });
     const { d1, count } = d1Counting();
     await run(d1);
-    // The sites, the days to import again, the imports (one batch) and the purges.
+    // The sites and the time zones (one batch), the days to import again, the imports (one batch) and the purges.
     expect(count()).toBe(4);
-    expect(queue.messages.length).toBe(100 * 21 + 1);
+    expect(queue.messages.length).toBe(100 * 24 + 1);
   });
 });

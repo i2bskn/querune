@@ -67,3 +67,8 @@ export function isUsableTimeZone(timeZone: unknown): timeZone is string {
 export function todayIn(timeZone: string, now: number): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
 }
+
+// Yesterday in timeZone, which must be usable (isUsableTimeZone).
+export function yesterdayIn(timeZone: string, now: number): string {
+  return addDays(todayIn(timeZone, now), -1);
+}

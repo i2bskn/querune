@@ -5,8 +5,10 @@ import type { SiteRow } from "../src/db/schema";
 import { PAGE_ROWS } from "../src/google/api";
 import { clearGoogleTokenCache } from "../src/google/credentials";
 import { newUlid } from "../src/ids";
+import { addDays } from "../src/sync/dates";
 import { handleSyncQueue, SYNC_DEAD_LETTER_QUEUE, SYNC_QUEUE } from "../src/sync/consumer";
-import { enqueueSync, type Dataset, type SyncMessage } from "../src/sync/enqueue";
+import { enqueueSync, runDailySync, type Dataset, type SyncMessage } from "../src/sync/enqueue";
+import { getSyncStatus } from "../src/sync/status";
 import {
   countTable,
   createSite,
@@ -73,9 +75,14 @@ function testEnv(overrides: Partial<Cloudflare.Env> = {}): Cloudflare.Env {
 }
 
 // Queues one day and returns its first message.
-async function queueDay(dataset: Dataset, date = FINAL_DATE, property = dataset === "ga4_landing_pages" ? GA4 : GSC) {
+async function queueDay(
+  dataset: Dataset,
+  date = FINAL_DATE,
+  property = dataset === "ga4_landing_pages" ? GA4 : GSC,
+  options: { acceptEmpty?: boolean } = {},
+) {
   const sending = fakeQueue();
-  await enqueueSync(env.DB, sending, [{ siteId: site.id, dataset, date, property }], { now, force: true });
+  await enqueueSync(env.DB, sending, [{ siteId: site.id, dataset, date, property }], { now, force: true, ...options });
   const message = sending.messages[0];
   if (message?.kind !== "sync") throw new Error("not queued");
   return message;
@@ -97,14 +104,20 @@ async function day(dataset: Dataset, date = FINAL_DATE): Promise<DayRow | null> 
     .first<DayRow>();
 }
 
-// Answers the Search Analytics API with the given number of rows in total, PAGE_ROWS per page.
-function gscAnswers(total: number, dataset: "gsc_pages" | "gsc_queries", metadata?: Record<string, unknown>) {
+// Answers the Search Analytics API with the given number of rows in total, PAGE_ROWS per page. metadata is returned
+// with every page, or with the first page only (firstPageOnly).
+function gscAnswers(
+  total: number,
+  dataset: "gsc_pages" | "gsc_queries",
+  metadata?: Record<string, unknown>,
+  options: { firstPageOnly?: boolean } = {},
+) {
   google.api = (call) => {
-    const body = call.body as { startRow: number; rowLimit: number };
+    const body = call.body as { startRow: number; rowLimit: number; startDate: string };
     const count = Math.max(0, Math.min(body.rowLimit, total - body.startRow));
     const response: Record<string, unknown> = { responseAggregationType: "byPage" };
-    if (count > 0) response.rows = gscRows(count, dataset, body.startRow);
-    if (metadata) response.metadata = metadata;
+    if (count > 0) response.rows = gscRows(count, dataset, body.startDate, body.startRow);
+    if (metadata && (!options.firstPageOnly || body.startRow === 0)) response.metadata = metadata;
     return Response.json(response);
   };
 }
@@ -151,7 +164,7 @@ describe("Search Console", () => {
     expect(google.calls[0]?.body).toEqual({
       startDate: FINAL_DATE,
       endDate: FINAL_DATE,
-      dimensions: ["page"],
+      dimensions: ["date", "page"],
       type: "web",
       dataState: "all",
       rowLimit: PAGE_ROWS,
@@ -161,8 +174,8 @@ describe("Search Console", () => {
       "SELECT page, clicks, impressions, position, typeof(clicks) AS t_clicks, typeof(impressions) AS t_impressions, typeof(position) AS t_position, run_id FROM gsc_page_daily ORDER BY page",
     ).all();
     expect(results).toEqual(
-      gscRows(3, "gsc_pages").map((row) => ({
-        page: row.keys[0],
+      gscRows(3, "gsc_pages", FINAL_DATE).map((row) => ({
+        page: row.keys[1],
         clicks: row.clicks,
         impressions: row.impressions,
         position: row.position,
@@ -186,11 +199,20 @@ describe("Search Console", () => {
     });
   });
 
+  it("asks for the date dimension", async () => {
+    gscAnswers(1, "gsc_pages");
+    await deliver(await queueDay("gsc_pages"));
+    expect(google.calls[0]?.body).toMatchObject({ dimensions: ["date", "page"] });
+    gscAnswers(1, "gsc_queries");
+    await deliver(await queueDay("gsc_queries"));
+    expect(google.calls[1]?.body).toMatchObject({ dimensions: ["date", "page", "query"] });
+  });
+
   it("imports page and query rows, with several rows per statement", async () => {
     gscAnswers(1500, "gsc_queries");
     const first = await queueDay("gsc_queries");
     expect((await deliver(first)).acked).toBe(true);
-    expect(google.calls[0]?.body).toMatchObject({ dimensions: ["page", "query"] });
+    expect(google.calls[0]?.body).toMatchObject({ dimensions: ["date", "page", "query"] });
     expect(await countTable("gsc_query_daily")).toBe(1500);
     const row = await env.DB.prepare(
       "SELECT page, query, clicks, typeof(clicks) AS t FROM gsc_query_daily WHERE query = 'query 1234'",
@@ -230,8 +252,8 @@ describe("Search Console", () => {
     google.api = () =>
       Response.json({
         rows: [
-          { keys: ["https://example.com/p/0"], clicks: 100, impressions: 1000, position: 2.5 },
-          { keys: ["https://example.com/p/1"], clicks: 50, impressions: 500, position: 3.5 },
+          { keys: [FINAL_DATE, "https://example.com/p/0"], clicks: 100, impressions: 1000, position: 2.5 },
+          { keys: [FINAL_DATE, "https://example.com/p/1"], clicks: 50, impressions: 500, position: 3.5 },
         ],
       });
     now += 60_000;
@@ -257,8 +279,12 @@ describe("Search Console", () => {
     expect(await countTable("gsc_page_daily")).toBe(5);
   });
 
-  it("records provisional data from the metadata and from the recent days", async () => {
+  it("records provisional data from the metadata, and from the recent days for a day without rows", async () => {
     gscAnswers(1, "gsc_pages", { first_incomplete_date: FINAL_DATE });
+    await deliver(await queueDay("gsc_pages"));
+    expect((await day("gsc_pages"))?.last_data_state).toBe("provisional");
+
+    gscAnswers(1, "gsc_pages", { firstIncompleteDate: "2026-10-19" });
     await deliver(await queueDay("gsc_pages"));
     expect((await day("gsc_pages"))?.last_data_state).toBe("provisional");
 
@@ -266,12 +292,125 @@ describe("Search Console", () => {
     await deliver(await queueDay("gsc_pages"));
     expect((await day("gsc_pages"))?.last_data_state).toBe("final");
 
-    // Today in Pacific Time is 2026-11-04: from 2026-11-01 the data is provisional.
+    // Today in Pacific Time is 2026-11-04. With rows and without metadata, the API says the day is complete, even
+    // yesterday.
     gscAnswers(1, "gsc_pages");
+    await deliver(await queueDay("gsc_pages", "2026-11-03"));
+    expect((await day("gsc_pages", "2026-11-03"))?.last_data_state).toBe("final");
+
+    // Without rows, from 2026-11-01 the data is provisional.
+    gscAnswers(0, "gsc_pages");
     await deliver(await queueDay("gsc_pages", "2026-11-01"));
     expect((await day("gsc_pages", "2026-11-01"))?.last_data_state).toBe("provisional");
     await deliver(await queueDay("gsc_pages", "2026-10-31"));
     expect((await day("gsc_pages", "2026-10-31"))?.last_data_state).toBe("final");
+    gscAnswers(0, "gsc_pages", { first_incomplete_date: "2026-10-30" });
+    await deliver(await queueDay("gsc_pages", "2026-10-30"));
+    expect((await day("gsc_pages", "2026-10-30"))?.last_data_state).toBe("provisional");
+  });
+
+  it("rejects rows of another date or with missing keys", async () => {
+    const rows = (keys: string[]) => () => Response.json({ rows: [{ keys, clicks: 1, impressions: 1, position: 1 }] });
+    for (const keys of [["2026-10-21", "https://example.com/"], ["https://example.com/"], [FINAL_DATE, "https://example.com/", "x"]]) {
+      google.api = rows(keys);
+      expect((await deliver(await queueDay("gsc_pages"))).acked).toBe(true);
+      expect(await day("gsc_pages")).toMatchObject({ status: "failed", error_code: "invalid_response" });
+    }
+    google.api = rows([FINAL_DATE, "https://example.com/"]);
+    await deliver(await queueDay("gsc_queries"));
+    expect(await day("gsc_queries")).toMatchObject({ status: "failed", error_code: "invalid_response" });
+  });
+
+  it("carries the incomplete mark of the first page to the last page", async () => {
+    gscAnswers(3000, "gsc_pages", { first_incomplete_date: FINAL_DATE }, { firstPageOnly: true });
+    const delivered = await deliverAll(await queueDay("gsc_pages"));
+    expect(delivered.map((m) => [m.offset, m.incomplete])).toEqual([
+      [0, undefined],
+      [2000, true],
+    ]);
+    expect(await day("gsc_pages")).toMatchObject({ status: "succeeded", last_data_state: "provisional", last_row_count: 3000 });
+  });
+
+  it("decides by the API when the last page of a day with rows is empty", async () => {
+    // Exactly 2,000 rows of yesterday: the follow-up page is empty, but the day has rows.
+    gscAnswers(2000, "gsc_pages");
+    const delivered = await deliverAll(await queueDay("gsc_pages", "2026-11-03"));
+    expect(delivered.map((m) => m.offset)).toEqual([0, 2000]);
+    expect(await day("gsc_pages", "2026-11-03")).toMatchObject({
+      status: "succeeded",
+      last_data_state: "final",
+      last_row_count: 2000,
+    });
+  });
+
+  it("accepts messages without incomplete and acceptEmpty, and rejects values that are not booleans", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    gscAnswers(1, "gsc_pages");
+    const first = await queueDay("gsc_pages");
+    expect(first).not.toHaveProperty("incomplete");
+    expect(first).not.toHaveProperty("acceptEmpty");
+    for (const body of [{ ...first, incomplete: "yes" }, { ...first, incomplete: 1 }, { ...first, acceptEmpty: "true" }]) {
+      expect((await deliver(body)).acked).toBe(true);
+    }
+    expect(google.calls).toHaveLength(0);
+    expect((await deliver({ ...first, incomplete: false, acceptEmpty: false })).acked).toBe(true);
+    expect(await day("gsc_pages")).toMatchObject({ status: "succeeded", last_data_state: "final" });
+  });
+});
+
+describe("empty responses", () => {
+  it("keeps the rows of a day that had rows when Google returns none", async () => {
+    gscAnswers(3, "gsc_pages");
+    await deliver(await queueDay("gsc_pages"));
+    const before = await day("gsc_pages");
+    now += HOUR;
+    gscAnswers(0, "gsc_pages");
+    const message = await deliver(await queueDay("gsc_pages"));
+    expect(message.acked).toBe(true);
+    expect(await day("gsc_pages")).toMatchObject({
+      status: "failed",
+      error_code: "empty_response",
+      error_message:
+        "前回は行があった日に Google が 0 行を返したため、前回のデータを残しました。0 行が正しい場合は、この日を手動で取り込んでください",
+      finished_at: now,
+      last_succeeded_at: before?.last_succeeded_at,
+      last_data_state: "final",
+      last_row_count: 3,
+    });
+    expect(await countTable("gsc_page_daily")).toBe(3);
+  });
+
+  it("accepts no rows in a manual import (acceptEmpty)", async () => {
+    gscAnswers(3, "gsc_pages");
+    await deliver(await queueDay("gsc_pages"));
+    now += HOUR;
+    gscAnswers(0, "gsc_pages");
+    const first = await queueDay("gsc_pages", FINAL_DATE, GSC, { acceptEmpty: true });
+    expect(first.acceptEmpty).toBe(true);
+    expect((await deliver(first)).acked).toBe(true);
+    expect(await day("gsc_pages")).toMatchObject({ status: "succeeded", last_succeeded_at: now, last_row_count: 0 });
+    expect(await countTable("gsc_page_daily")).toBe(0);
+  });
+
+  it("succeeds with no rows when the last import had none", async () => {
+    gscAnswers(0, "gsc_pages");
+    await deliver(await queueDay("gsc_pages"));
+    now += HOUR;
+    await deliver(await queueDay("gsc_pages"));
+    expect(await day("gsc_pages")).toMatchObject({ status: "succeeded", last_succeeded_at: now, last_row_count: 0 });
+  });
+
+  it("does the same for GA4", async () => {
+    ga4Answers(3, FINAL_DATE);
+    await deliver(await queueDay("ga4_landing_pages"));
+    now += HOUR;
+    ga4Answers(0, FINAL_DATE);
+    await deliver(await queueDay("ga4_landing_pages"));
+    expect(await day("ga4_landing_pages")).toMatchObject({ status: "failed", error_code: "empty_response", last_row_count: 3 });
+    expect(await countTable("ga4_landing_daily")).toBe(3);
+    await deliver(await queueDay("ga4_landing_pages", FINAL_DATE, GA4, { acceptEmpty: true }));
+    expect(await day("ga4_landing_pages")).toMatchObject({ status: "succeeded", last_row_count: 0 });
+    expect(await countTable("ga4_landing_daily")).toBe(0);
   });
 });
 
@@ -316,26 +455,139 @@ describe("GA4", () => {
     expect(await countTable("ga4_landing_daily")).toBe(4001);
   });
 
-  it("decides provisional days in the time zone of the property, or UTC", async () => {
-    // 2026-11-05 03:00 UTC is 2026-11-05 in Tokyo and 2026-11-04 in Los Angeles.
-    ga4Answers(1, "2026-11-03", "Asia/Tokyo");
-    await deliver(await queueDay("ga4_landing_pages", "2026-11-03"));
-    expect((await day("ga4_landing_pages", "2026-11-03"))?.last_data_state).toBe("provisional");
-    ga4Answers(1, "2026-11-02", "Asia/Tokyo");
-    await deliver(await queueDay("ga4_landing_pages", "2026-11-02"));
-    expect((await day("ga4_landing_pages", "2026-11-02"))?.last_data_state).toBe("final");
-    ga4Answers(1, "2026-11-02", "America/Los_Angeles");
-    await deliver(await queueDay("ga4_landing_pages", "2026-11-02"));
-    expect((await day("ga4_landing_pages", "2026-11-02"))?.last_data_state).toBe("provisional");
-    ga4Answers(1, "2026-11-02", "Not/AZone");
-    await deliver(await queueDay("ga4_landing_pages", "2026-11-02"));
-    expect(await day("ga4_landing_pages", "2026-11-02")).toMatchObject({ last_data_state: "final", last_time_zone: "UTC" });
-    ga4Answers(1, "2026-11-03", null);
-    await deliver(await queueDay("ga4_landing_pages", "2026-11-03"));
-    expect(await day("ga4_landing_pages", "2026-11-03")).toMatchObject({
-      last_data_state: "provisional",
-      last_time_zone: "UTC",
-    });
+  it("decides provisional days up to 4 days ago in the time zone of the property, or UTC", async () => {
+    // 2026-11-05 03:00 UTC is 2026-11-05 in Tokyo and 2026-11-04 in Los Angeles and New York.
+    const cases: [string, string | null, "final" | "provisional"][] = [
+      ["2026-11-01", "Asia/Tokyo", "provisional"],
+      ["2026-10-31", "Asia/Tokyo", "final"],
+      // 2026-11-01 is the end of daylight saving time in the United States.
+      ["2026-10-31", "America/Los_Angeles", "provisional"],
+      ["2026-10-30", "America/Los_Angeles", "final"],
+      ["2026-10-31", "America/New_York", "provisional"],
+      ["2026-10-30", "America/New_York", "final"],
+      ["2026-11-01", "Not/AZone", "provisional"],
+      ["2026-10-31", "Not/AZone", "final"],
+      ["2026-11-01", null, "provisional"],
+      ["2026-10-31", null, "final"],
+    ];
+    for (const [date, timeZone, state] of cases) {
+      ga4Answers(1, date, timeZone);
+      await deliver(await queueDay("ga4_landing_pages", date));
+      expect(await day("ga4_landing_pages", date), `${date} ${timeZone}`).toMatchObject({
+        last_data_state: state,
+        // Without a usable time zone, the day is judged in UTC but no time zone is recorded.
+        last_time_zone: timeZone === null || timeZone === "Not/AZone" ? null : timeZone,
+      });
+    }
+  });
+
+  it("ignores incomplete in the messages", async () => {
+    ga4Answers(2001, FINAL_DATE);
+    const first = await queueDay("ga4_landing_pages");
+    expect((await deliver({ ...first, incomplete: true })).acked).toBe(true);
+    expect(queue.messages).toHaveLength(1);
+    expect(queue.messages[0]).not.toHaveProperty("incomplete");
+  });
+
+  it("imports a final day again: updates the values and deletes the rows that are gone", async () => {
+    ga4Answers(3, FINAL_DATE);
+    await deliver(await queueDay("ga4_landing_pages"));
+    expect((await day("ga4_landing_pages"))?.last_data_state).toBe("final");
+    now += HOUR;
+    google.api = () =>
+      Response.json({
+        rows: [
+          { dimensionValues: [{ value: "20261020" }, { value: "/p/0" }, { value: "Organic Search" }], metricValues: [{ value: "50" }, { value: "40" }, { value: "3" }] },
+          { dimensionValues: [{ value: "20261020" }, { value: "/p/2" }, { value: "Organic Search" }], metricValues: [{ value: "7" }, { value: "2" }, { value: "1.5" }] },
+        ],
+        metadata: { timeZone: "Asia/Tokyo" },
+      });
+    const second = await queueDay("ga4_landing_pages");
+    await deliver(second);
+    const { results } = await env.DB.prepare(
+      "SELECT landing_page, channel_group, sessions, engaged_sessions, key_events, run_id FROM ga4_landing_daily ORDER BY landing_page",
+    ).all();
+    expect(results).toEqual([
+      { landing_page: "/p/0", channel_group: "Organic Search", sessions: 50, engaged_sessions: 40, key_events: 3, run_id: second.runId },
+      { landing_page: "/p/2", channel_group: "Organic Search", sessions: 7, engaged_sessions: 2, key_events: 1.5, run_id: second.runId },
+    ]);
+    expect(await day("ga4_landing_pages")).toMatchObject({ status: "succeeded", last_row_count: 2, last_succeeded_at: now });
+  });
+});
+
+describe("schedules", () => {
+  // Answers every Search Console request with rows and without metadata, and every GA4 request with rows in Tokyo.
+  function answerAll(): void {
+    google.api = (call) => {
+      if (call.url.startsWith("https://analyticsdata.googleapis.com/")) {
+        const body = call.body as { dateRanges: { startDate: string }[] };
+        const date = body.dateRanges[0]?.startDate ?? "";
+        return Response.json({ rows: ga4Rows(2, date), metadata: { timeZone: "Asia/Tokyo" } });
+      }
+      const body = call.body as { startDate: string; dimensions: string[] };
+      return Response.json({ rows: gscRows(2, body.dimensions.length === 2 ? "gsc_pages" : "gsc_queries", body.startDate) });
+    };
+  }
+
+  // Runs the cron at the time and delivers every import it asks for.
+  async function runAt(at: number, mode: "full" | "fresh" = "full"): Promise<SyncBody[]> {
+    now = at;
+    const sending = fakeQueue();
+    await runDailySync({ db: env.DB, queue: sending, now: at, serviceAccountKey: key, mode });
+    const sent = sending.messages.filter((m): m is SyncBody => m.kind === "sync");
+    for (const message of sent) await deliverAll(message);
+    return sent;
+  }
+
+  async function insertGa4Day(date: string, state: "final" | "provisional"): Promise<void> {
+    await env.DB.prepare(
+      `INSERT INTO sync_days (site_id, dataset, date, property, status, run_id, queued_at, last_succeeded_at,
+        last_data_state, last_row_count, last_truncated, last_time_zone)
+      VALUES (?, 'ga4_landing_pages', ?, ?, 'succeeded', 'r', 1, 1, ?, 2, 0, 'Asia/Tokyo')`,
+    )
+      .bind(site.id, date, GA4, state)
+      .run();
+  }
+
+  async function ga4FinalThrough(at: number): Promise<string | null> {
+    const status = await getSyncStatus(env.DB, { id: site.id, gscProperty: GSC, ga4PropertyId: GA4 }, at);
+    return status.datasets.find((d) => d.dataset === "ga4_landing_pages")?.final_through ?? null;
+  }
+
+  it("makes the GA4 days of the last week final by Friday morning in Tokyo", async () => {
+    answerAll();
+    for (const date of ["2026-10-30", "2026-10-31", "2026-11-01"]) await insertGa4Day(date, "final");
+    await insertGa4Day("2026-11-02", "provisional");
+    // 2026-11-13 (Friday) 03:00 in Tokyo.
+    await runAt(Date.UTC(2026, 10, 12, 18, 0, 0));
+    for (let date = "2026-11-02"; date <= "2026-11-08"; date = addDays(date, 1)) {
+      expect((await day("ga4_landing_pages", date))?.last_data_state, date).toBe("final");
+    }
+    for (let date = "2026-11-09"; date <= "2026-11-12"; date = addDays(date, 1)) {
+      expect((await day("ga4_landing_pages", date))?.last_data_state, date).toBe("provisional");
+    }
+    // During Friday in Tokyo.
+    expect(await ga4FinalThrough(Date.UTC(2026, 10, 13, 0, 0, 0))).toBe("2026-11-08");
+    expect(await ga4FinalThrough(Date.UTC(2026, 10, 13, 14, 59, 0))).toBe("2026-11-08");
+    // Search Console marks no day incomplete: the days with rows are final.
+    expect((await day("gsc_pages", "2026-11-11"))?.last_data_state).toBe("final");
+  });
+
+  it("makes the last day of the month final in GA4 on the 5th in Tokyo", async () => {
+    answerAll();
+    await insertGa4Day("2026-10-01", "final");
+    // 2026-12-01 03:00 in Tokyo, 2026-11-30 10:00 in Los Angeles.
+    const first = await runAt(Date.UTC(2026, 10, 30, 18, 0, 0));
+    expect(first.filter((m) => m.dataset === "gsc_pages").map((m) => m.date).sort().at(-1)).toBe("2026-11-29");
+    expect(await day("gsc_pages", "2026-11-30")).toBeNull();
+    const status = await getSyncStatus(env.DB, { id: site.id, gscProperty: GSC, ga4PropertyId: GA4 }, now);
+    expect(status.datasets.find((d) => d.dataset === "gsc_pages")?.expected_latest_date).toBe("2026-11-29");
+    expect((await day("ga4_landing_pages", "2026-11-30"))?.last_data_state).toBe("provisional");
+    await runAt(Date.UTC(2026, 11, 1, 18, 0, 0));
+    expect((await day("ga4_landing_pages", "2026-11-30"))?.last_data_state).toBe("provisional");
+    // 2026-12-05 03:00 in Tokyo.
+    await runAt(Date.UTC(2026, 11, 4, 18, 0, 0));
+    expect((await day("ga4_landing_pages", "2026-11-30"))?.last_data_state).toBe("final");
   });
 });
 

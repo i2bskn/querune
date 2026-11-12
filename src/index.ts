@@ -3,7 +3,7 @@ import app from "./app";
 import { core } from "./core";
 import { loadConfig, type Bindings } from "./env";
 import { handleSyncQueue } from "./sync/consumer";
-import { runDailySync } from "./sync/enqueue";
+import { runDailySync, syncModeOf } from "./sync/enqueue";
 
 export type { AppType } from "./app";
 
@@ -17,8 +17,8 @@ export default {
     await handleSyncQueue(batch, env);
   },
 
-  // The daily import (src/sync/enqueue.ts).
-  async scheduled(_controller: ScheduledController, env: Bindings, ctx: ExecutionContext): Promise<void> {
+  // The imports of the crons in wrangler.jsonc (src/sync/enqueue.ts).
+  async scheduled(controller: ScheduledController, env: Bindings, ctx: ExecutionContext): Promise<void> {
     const result = loadConfig(env);
     if (!result.ok) {
       console.error("invalid configuration", { invalid: result.invalid });
@@ -30,6 +30,7 @@ export default {
         queue: env.SYNC_QUEUE,
         now: clock.now(),
         serviceAccountKey: env.GOOGLE_SERVICE_ACCOUNT_KEY,
+        mode: syncModeOf(controller.cron),
       }),
     );
   },

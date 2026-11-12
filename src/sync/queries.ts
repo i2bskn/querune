@@ -134,12 +134,16 @@ export type Coverage = {
   refreshing_days: number;
   missing_dates: string[];
   missing_dates_truncated: boolean;
+  // The available days with provisional data, ascending, up to 31.
+  provisional_dates: string[];
+  provisional_dates_truncated: boolean;
   time_zone: string | null;
   // Only when the available days have more than one time zone.
   time_zones?: string[];
 };
 
 const MISSING_DATES_LIMIT = 31;
+const PROVISIONAL_DATES_LIMIT = 31;
 
 type CoverageRow = {
   date: string;
@@ -169,17 +173,23 @@ export function coverageStatement(
     const availableDates = new Set(available.map((row) => row.date));
     const dates = datesBetween(period.start, period.end);
     const missing = dates.filter((date) => !availableDates.has(date));
+    const provisional = available
+      .filter((row) => row.last_data_state === "provisional")
+      .map((row) => row.date)
+      .sort();
     const coverage: Coverage = {
       dataset: params.dataset,
       start_date: period.start,
       end_date: period.end,
       days: dates.length,
       available_days: available.length,
-      provisional_days: available.filter((row) => row.last_data_state === "provisional").length,
+      provisional_days: provisional.length,
       truncated_days: available.filter((row) => row.last_truncated === 1).length,
       refreshing_days: available.filter((row) => row.status === "queued" || row.status === "running").length,
       missing_dates: missing.slice(0, MISSING_DATES_LIMIT),
       missing_dates_truncated: missing.length > MISSING_DATES_LIMIT,
+      provisional_dates: provisional.slice(0, PROVISIONAL_DATES_LIMIT),
+      provisional_dates_truncated: provisional.length > PROVISIONAL_DATES_LIMIT,
       time_zone: params.fixedTimeZone,
     };
     if (params.fixedTimeZone === null) {

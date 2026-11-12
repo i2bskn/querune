@@ -3,8 +3,10 @@
 // A sync message is one page (up to PAGE_ROWS rows) of the import of one day and dataset. Every message of an import
 // carries its run_id, and every write is conditional on sync_days still holding that run_id as running with the same
 // property: a message of an import that was replaced, finished, or whose site was deleted or whose property changed
-// writes nothing. Rows are upserted, and the last page deletes the rows that the import did not write. A purge
-// message deletes the rows left by a deleted site or an old property, 5,000 rows at a time.
+// writes nothing. Rows are upserted, and the last page deletes the rows that the import did not write. An import
+// that returns no rows for a day that had rows fails (empty_response) and keeps them, unless the message accepts it
+// (acceptEmpty, a manual import). A purge message deletes the rows left by a deleted site or an old property, 5,000
+// rows at a time.
 
 import { clock, describeError } from "@i2bskn/workers-app-core";
 import { DATASETS } from "../db/schema";
@@ -16,6 +18,9 @@ import { fetchSearchAnalyticsPage } from "../google/search-console";
 import { SITE_ID_PATTERN, ULID_PATTERN } from "../ids";
 import { addDays, isUsableTimeZone, isValidDate, todayIn } from "./dates";
 import { propertyOf, type Dataset, type SyncMessage } from "./enqueue";
+import { SEARCH_CONSOLE_TIME_ZONE } from "./time-zones";
+
+export { SEARCH_CONSOLE_TIME_ZONE };
 
 export const SYNC_QUEUE = "querune-sync";
 export const SYNC_DEAD_LETTER_QUEUE = "querune-sync-dlq";
@@ -27,10 +32,11 @@ export const MAX_ROWS_PER_DAY = 50_000;
 const UPSERT_ROWS_PER_STATEMENT = 1000;
 // The rows deleted by one purge message.
 export const PURGE_ROWS_PER_MESSAGE = 5000;
-export const SEARCH_CONSOLE_TIME_ZONE = "America/Los_Angeles";
-// Search Console days up to 3 days ago, and GA4 days up to 2 days ago (in their time zones), are provisional.
+// Search Console days are provisional when the API marks them incomplete; a day without rows, which the API cannot
+// mark, is provisional up to 3 days ago. GA4 does not tell: its days are provisional up to 4 days ago (events arrive
+// up to 2 days late and take up to 48 hours to process). Both in the time zone of the dataset.
 const GSC_PROVISIONAL_DAYS = 3;
-const GA4_PROVISIONAL_DAYS = 2;
+const GA4_PROVISIONAL_DAYS = 4;
 const RETRY_BASE_SECONDS = 60;
 const RETRY_MAX_SECONDS = 3600;
 const UNEXPECTED_RETRY_SECONDS = 60;
@@ -132,7 +138,7 @@ export function parseSyncMessage(body: unknown): SyncMessage | null {
       : null;
   }
   if (record.kind !== "sync") return null;
-  const { siteId, dataset, date, property, runId, offset } = record;
+  const { siteId, dataset, date, property, runId, offset, incomplete, acceptEmpty } = record;
   if (typeof siteId !== "string" || !SITE_ID_PATTERN.test(siteId)) return null;
   if (typeof dataset !== "string" || !(DATASETS as readonly string[]).includes(dataset)) return null;
   if (!isValidDate(date)) return null;
@@ -140,7 +146,14 @@ export function parseSyncMessage(body: unknown): SyncMessage | null {
   if (typeof runId !== "string" || !ULID.test(runId)) return null;
   if (typeof offset !== "number" || !Number.isInteger(offset) || offset < 0 || offset % PAGE_ROWS !== 0) return null;
   if (offset >= MAX_ROWS_PER_DAY) return null;
-  return { kind: "sync", siteId, dataset: dataset as Dataset, date, property, runId, offset };
+  // Missing in the messages sent before these fields existed.
+  if (incomplete !== undefined && typeof incomplete !== "boolean") return null;
+  if (acceptEmpty !== undefined && typeof acceptEmpty !== "boolean") return null;
+  const parsed: SyncBody = { kind: "sync", siteId, dataset: dataset as Dataset, date, property, runId, offset };
+  // incomplete only means something for Search Console.
+  if (incomplete === true && dataset !== "ga4_landing_pages") parsed.incomplete = true;
+  if (acceptEmpty === true) parsed.acceptEmpty = true;
+  return parsed;
 }
 
 // 60 seconds doubling with each try, up to an hour.
@@ -164,6 +177,8 @@ const CREDENTIALS_INVALID_MESSAGE = "サービスアカウントの鍵を確認�
 const PERMISSION_DENIED_MESSAGE = "サービスアカウントにプロパティの閲覧権限がありません";
 const INVALID_RESPONSE_MESSAGE = "Google の応答を読み取れませんでした";
 const RETRY_EXHAUSTED_MESSAGE = "再試行の上限に達しました";
+const EMPTY_RESPONSE_MESSAGE =
+  "前回は行があった日に Google が 0 行を返したため、前回のデータを残しました。0 行が正しい場合は、この日を手動で取り込んでください";
 
 // The error code and message recorded for a failure that is not retried.
 function failureOf(failure: Extract<GoogleFailure, { retryable: false }>): { code: string; message: string } {
@@ -177,7 +192,15 @@ function failureOf(failure: Extract<GoogleFailure, { retryable: false }>): { cod
   }
 }
 
-type FetchedPage = { rows: (string | number)[][]; dataState: "final" | "provisional"; timeZone: string };
+type FetchedPage = {
+  rows: (string | number)[][];
+  // The data state of the day if this is the last page.
+  dataState: "final" | "provisional";
+  // Search Console: this page or an earlier one was marked incomplete. Always false for GA4.
+  incomplete: boolean;
+  // The time zone recorded for the day; null when GA4 did not return a usable one.
+  timeZone: string | null;
+};
 
 // One page from Google, with the data state of the day if it were the last page.
 async function fetchPage(
@@ -195,9 +218,13 @@ async function fetchPage(
       fetcher: deps.fetcher,
     });
     if (!res.ok) return res;
-    const timeZone = isUsableTimeZone(res.timeZone) ? res.timeZone : "UTC";
-    const provisional = m.date >= addDays(todayIn(timeZone, now), -GA4_PROVISIONAL_DAYS);
-    return { ok: true, page: { rows: res.rows, dataState: provisional ? "provisional" : "final", timeZone } };
+    // Without a usable time zone the day is judged in UTC, but no time zone is recorded: UTC is only a guess.
+    const timeZone = isUsableTimeZone(res.timeZone) ? res.timeZone : null;
+    const provisional = m.date >= addDays(todayIn(timeZone ?? "UTC", now), -GA4_PROVISIONAL_DAYS);
+    return {
+      ok: true,
+      page: { rows: res.rows, dataState: provisional ? "provisional" : "final", incomplete: false, timeZone },
+    };
   }
   const res = await fetchSearchAnalyticsPage({
     accessToken,
@@ -208,12 +235,22 @@ async function fetchPage(
     fetcher: deps.fetcher,
   });
   if (!res.ok) return res;
-  const provisional =
-    (res.firstIncompleteDate !== null && res.firstIncompleteDate <= m.date) ||
-    m.date >= addDays(todayIn(SEARCH_CONSOLE_TIME_ZONE, now), -GSC_PROVISIONAL_DAYS);
+  // The API returns first_incomplete_date only when the period has incomplete data. Whether it is returned with the
+  // later pages is not documented, so a mark on an earlier page is carried over (m.incomplete).
+  const incomplete = m.incomplete === true || (res.firstIncompleteDate !== null && res.firstIncompleteDate <= m.date);
+  // A follow-up page is sent only after a full page, so a day with a later page has rows.
+  const hasRows = m.offset > 0 || res.rows.length > 0;
+  const provisional = hasRows
+    ? incomplete
+    : incomplete || m.date >= addDays(todayIn(SEARCH_CONSOLE_TIME_ZONE, now), -GSC_PROVISIONAL_DAYS);
   return {
     ok: true,
-    page: { rows: res.rows, dataState: provisional ? "provisional" : "final", timeZone: SEARCH_CONSOLE_TIME_ZONE },
+    page: {
+      rows: res.rows,
+      dataState: provisional ? "provisional" : "final",
+      incomplete,
+      timeZone: SEARCH_CONSOLE_TIME_ZONE,
+    },
   };
 }
 
@@ -283,6 +320,29 @@ async function sync(deps: SyncDeps, message: Message<unknown>, m: SyncBody): Pro
   }
   const { page } = fetched;
 
+  // No rows for the whole day (a follow-up page is sent only after a full page). If the last successful import had
+  // rows, Google's answer is not trusted over them unless the message accepts it.
+  if (m.offset === 0 && page.rows.length === 0 && m.acceptEmpty !== true) {
+    const last = await db
+      .prepare(
+        `SELECT last_row_count FROM sync_days
+        WHERE site_id = ? AND dataset = ? AND date = ? AND run_id = ? AND status = 'running'`,
+      )
+      .bind(m.siteId, m.dataset, m.date, m.runId)
+      .first<{ last_row_count: number | null }>();
+    if (last !== null && (last.last_row_count ?? 0) > 0) {
+      await db
+        .prepare(
+          `UPDATE sync_days SET status = 'failed', error_code = 'empty_response', error_message = ?, finished_at = ?
+          WHERE site_id = ? AND dataset = ? AND date = ? AND run_id = ? AND status = 'running'`,
+        )
+        .bind(EMPTY_RESPONSE_MESSAGE, now, m.siteId, m.dataset, m.date, m.runId)
+        .run();
+      message.ack();
+      return;
+    }
+  }
+
   // ?1 site_id, ?2 property, ?3 date, ?4 run_id, ?5 dataset, ?6 the rows.
   const statements: D1PreparedStatement[] = [];
   const upsert = upsertSql(m.dataset);
@@ -302,7 +362,9 @@ async function sync(deps: SyncDeps, message: Message<unknown>, m: SyncBody): Pro
 
   const full = page.rows.length === PAGE_ROWS;
   if (full && m.offset + PAGE_ROWS < MAX_ROWS_PER_DAY) {
-    await deps.queue.send({ ...m, offset: m.offset + PAGE_ROWS });
+    const next: SyncBody = { ...m, offset: m.offset + PAGE_ROWS };
+    if (page.incomplete) next.incomplete = true;
+    await deps.queue.send(next);
     message.ack();
     return;
   }

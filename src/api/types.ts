@@ -73,6 +73,24 @@ export type SyncFailure = {
   finished_at: number | null;
 };
 
+// The state of one day of the recent days of a dataset. final and provisional: imported successfully at least once
+// (by the data state of the last success). pending: never imported successfully, queued or running. failed: never
+// imported successfully, failed. missing: not asked for (for the current property).
+export type RecentDayState = "final" | "provisional" | "pending" | "failed" | "missing";
+
+export type RecentDay = {
+  date: string;
+  state: RecentDayState;
+  // Imported successfully and being imported again (queued or running).
+  updating: boolean;
+  // The rows of the last successful import; null if never imported successfully.
+  row_count: number | null;
+  // UNIX time in milliseconds of the last successful import.
+  fetched_at: number | null;
+  // The error of the last import when it failed, also for a day imported successfully before.
+  error_code: string | null;
+};
+
 // The import state of one dataset, counted over the days of its current property. A day is available once it has
 // been imported successfully; it stays available while it is imported again.
 export type DatasetSyncStatus = {
@@ -93,12 +111,33 @@ export type DatasetSyncStatus = {
   failed: number;
   // The failed days, newest first, up to 10.
   recent_failures: SyncFailure[];
+  // The time zone of the dates: America/Los_Angeles for Search Console, the time zone of the property for GA4. null
+  // when not configured, and for GA4 until the first import records it.
+  time_zone: string | null;
+  // false for GA4 until its time zone is recorded (expected_latest_date is then yesterday in Etc/GMT+12), and when
+  // not configured.
+  time_zone_known: boolean;
+  // Yesterday in time_zone: the latest day that the imports are expected to have. null when not configured.
+  expected_latest_date: string | null;
+  // How final days are decided: by the API (Search Console; a day without rows by the days elapsed), or by the days
+  // elapsed (GA4). null when not configured.
+  state_basis: "api" | "elapsed_days" | null;
+  // The recent days imported again every day. 0 when not configured.
+  refresh_days: number;
+  // The 14 days to expected_latest_date, oldest first. Empty when not configured.
+  recent_days: RecentDay[];
+  // The day before the oldest of recent_days that is not final, or expected_latest_date if every one is final. null
+  // if the oldest is not final, or when not configured. Only recent_days are looked at.
+  final_through: string | null;
 };
 
 // GET /api/v1/sites/:id/sync. datasets is always gsc_pages, gsc_queries, ga4_landing_pages.
 export type SyncStatus = {
   site_id: string;
   datasets: DatasetSyncStatus[];
+  // The earliest final_through of the configured datasets (as date strings, each in the time zone of its dataset).
+  // null if any of them is null, or without a configured dataset.
+  final_through: string | null;
 };
 
 // An article of the ledger of a site. Times are UNIX time in milliseconds.

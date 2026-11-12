@@ -168,7 +168,7 @@ describe("loadSiteDetail", () => {
 
 describe("loadSyncPanel", () => {
   const GOOGLE: GoogleStatus = { configured: true, client_email: "querune@project.iam.gserviceaccount.com", error: null };
-  const STATUS: SyncStatus = { site_id: SITE.id, datasets: [] };
+  const STATUS: SyncStatus = { site_id: SITE.id, datasets: [], final_through: null };
   const statusUrl = `/api/v1/sites/${SITE.id}/sync`;
 
   it("returns the service account and the import state", async () => {

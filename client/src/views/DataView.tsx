@@ -1,5 +1,5 @@
 import { type FormEvent, useEffect, useState } from "react";
-import type { DatasetSyncStatus, GoogleStatus, Site } from "../../../src/api/types";
+import type { DatasetSyncStatus, GoogleStatus, RecentDay, Site } from "../../../src/api/types";
 import { requestSync } from "../actions";
 import { CopyIcon, ExternalIcon } from "../icons";
 import { Link } from "../Link";
@@ -17,6 +17,26 @@ const DATASET_LABELS: Record<DatasetSyncStatus["dataset"], { source: string; det
   gsc_queries: { source: "Search Console", detail: "クエリ別" },
   ga4_landing_pages: { source: "GA4", detail: "ランディングページ × チャネル" },
 };
+
+const DAY_STATE_LABELS: Record<RecentDay["state"], string> = {
+  final: "確定",
+  provisional: "速報値",
+  pending: "取得待ち",
+  failed: "失敗",
+  missing: "未取得",
+};
+
+// A day imported successfully before whose last import failed.
+function retryFailed(day: RecentDay): boolean {
+  return (day.state === "final" || day.state === "provisional") && day.error_code !== null;
+}
+
+function dayLabel(day: RecentDay): string {
+  let label = `${formatDate(day.date)} ${DAY_STATE_LABELS[day.state]}`;
+  if (day.updating) label += "（取り直し中）";
+  if (retryFailed(day)) label += "（取り直しに失敗）";
+  return label;
+}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -42,7 +62,7 @@ export function DataView({ client, id }: { client: ApiClient; id: string }) {
           <p className="eyebrow">{site.name}</p>
           <h1>データの取り込み</h1>
           <p className="lead">
-            Search Console と GA4 の集計を毎日 18:00（UTC・日本時間 3:00）に取り込みます。過去の期間や欠けた日はここから取り込めます。
+            Search Console と GA4 の集計を毎日 6:00 と 18:00（UTC・日本時間 15:00 と 3:00）に取り込みます。過去の期間や欠けた日はここから取り込めます。
           </p>
         </div>
       </header>
@@ -204,7 +224,13 @@ function DatasetCard({ status, siteId }: { status: DatasetSyncStatus; siteId: st
         </div>
         <div>
           <dt>最新の日</dt>
-          <dd>{status.latest_date === null ? "—" : formatDate(status.latest_date)}</dd>
+          <dd>
+            {status.latest_date === null ? "—" : formatDate(status.latest_date)}
+            {status.expected_latest_date !== null &&
+              (status.latest_date === null || status.latest_date < status.expected_latest_date) && (
+                <span className="dataset-expected">想定 {formatDate(status.expected_latest_date)}</span>
+              )}
+          </dd>
         </div>
         <div>
           <dt>待ち・実行中</dt>
@@ -221,6 +247,7 @@ function DatasetCard({ status, siteId }: { status: DatasetSyncStatus; siteId: st
           </dd>
         </div>
       </dl>
+      <RecentDays status={status} />
       <p className="hint">
         {status.provisional_from !== null && <>{formatDate(status.provisional_from)} 以降は速報値です。</>}
         {status.last_succeeded_at !== null && (
@@ -246,6 +273,65 @@ function DatasetCard({ status, siteId }: { status: DatasetSyncStatus; siteId: st
         </details>
       )}
     </section>
+  );
+}
+
+// The state of each of the recent days, and how final days are decided.
+function RecentDays({ status }: { status: DatasetSyncStatus }) {
+  const days = status.recent_days;
+  const first = days[0];
+  const last = days.at(-1);
+  const basis =
+    status.state_basis === "api"
+      ? `Search Console の API が未確定とした日を速報値にしています（行のない日は日数で推定）。直近 ${status.refresh_days} 日は毎日取り直します。`
+      : `GA4 の API は確定を返さないため、経過日数で確定とみなしています（推定）。直近 ${status.refresh_days} 日は毎日取り直します。`;
+  return (
+    <div className="recent-days">
+      {first !== undefined && last !== undefined && (
+        <>
+          <p className="recent-days-title">直近 {days.length} 日</p>
+          <ol className="day-strip">
+            {days.map((day) => (
+              <li
+                key={day.date}
+                className={`day day-${day.state}${day.updating ? " day-updating" : ""}${retryFailed(day) ? " day-retry-failed" : ""}`}
+                title={dayLabel(day)}
+              >
+                <span className="sr-only">{dayLabel(day)}</span>
+              </li>
+            ))}
+          </ol>
+          <p className="day-strip-range mono" aria-hidden="true">
+            <span>{formatDate(first.date)}</span>
+            <span>{formatDate(last.date)}</span>
+          </p>
+          <ul className="day-legend">
+            {(Object.keys(DAY_STATE_LABELS) as RecentDay["state"][]).map((state) => (
+              <li key={state}>
+                <span className={`day day-${state}`} aria-hidden="true" />
+                {DAY_STATE_LABELS[state]}
+              </li>
+            ))}
+            <li>
+              <span className="day day-final day-updating" aria-hidden="true" />
+              取り直し中
+            </li>
+            <li>
+              <span className="day day-final day-retry-failed" aria-hidden="true" />
+              取り直しに失敗
+            </li>
+          </ul>
+        </>
+      )}
+      <p className="hint">
+        {basis}
+        {status.time_zone !== null ? (
+          <>日付は {status.time_zone} の日付です。</>
+        ) : (
+          status.state_basis === "elapsed_days" && <>タイムゾーン未確定（最初の取り込みで決まります）。</>
+        )}
+      </p>
+    </div>
   );
 }
 

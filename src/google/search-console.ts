@@ -27,7 +27,9 @@ function firstIncompleteDate(body: Record<string, unknown>): string | null {
   return typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value) ? value.slice(0, 10) : null;
 }
 
-// Up to PAGE_ROWS rows of date from offset, including fresh data (dataState "all"). Never throws.
+// Up to PAGE_ROWS rows of date from offset, including fresh data (dataState "all"). The rows are grouped by date as
+// well, which the API needs to return first_incomplete_date; the date is checked and left out of the rows. Never
+// throws.
 export async function fetchSearchAnalyticsPage(params: {
   accessToken: string;
   property: string;
@@ -36,7 +38,7 @@ export async function fetchSearchAnalyticsPage(params: {
   offset: number;
   fetcher?: typeof fetch;
 }): Promise<SearchConsolePage> {
-  const dimensions = params.dataset === "gsc_pages" ? ["page"] : ["page", "query"];
+  const dimensions = params.dataset === "gsc_pages" ? ["date", "page"] : ["date", "page", "query"];
   const res = await postGoogle(
     searchAnalyticsUrl(params.property),
     params.accessToken,
@@ -63,8 +65,10 @@ export async function fetchSearchAnalyticsPage(params: {
     const { keys, clicks, impressions, position } = raw as Record<string, unknown>;
     if (!Array.isArray(keys) || keys.length !== dimensions.length) return INVALID_RESPONSE;
     if (!keys.every((key) => typeof key === "string")) return INVALID_RESPONSE;
+    // Only the requested day is asked for.
+    if (keys[0] !== params.date) return INVALID_RESPONSE;
     if (!isFiniteNumber(clicks) || !isFiniteNumber(impressions) || !isFiniteNumber(position)) return INVALID_RESPONSE;
-    rows.push([...(keys as string[]), clicks, impressions, position]);
+    rows.push([...(keys.slice(1) as string[]), clicks, impressions, position]);
   }
   return { ok: true, rows, firstIncompleteDate: firstIncompleteDate(record) };
 }

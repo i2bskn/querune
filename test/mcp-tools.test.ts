@@ -2,6 +2,7 @@ import type { OAuthResourceContext } from "@cloudflare/workers-oauth-provider";
 import { createExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clock } from "@i2bskn/workers-app-core";
 import type { UserRow } from "../src/db/schema";
 import { core } from "../src/core";
 import { countTable, createSite, createUser, ORIGIN, resetDb } from "./helpers";
@@ -239,6 +240,46 @@ describe("get_sync_status", () => {
     ]);
   });
 
+  it("returns the recent days, the expected latest date and final_through", async () => {
+    // 2026-11-12 06:00 UTC: 2026-11-11 22:00 in Los Angeles, 2026-11-12 15:00 in Tokyo.
+    vi.spyOn(clock, "now").mockReturnValue(Date.UTC(2026, 10, 12, 6, 0, 0));
+    const site = await createSite({ gscProperty: GSC, ga4PropertyId: GA4 });
+    await insertDays(site.id, "gsc_pages", GSC, ["2026-10-28", "2026-10-29", "2026-10-30", "2026-10-31"]);
+    await insertDays(site.id, "gsc_pages", GSC, ["2026-11-01"], { last_data_state: "provisional" });
+    await insertDays(site.id, "ga4_landing_pages", GA4, ["2026-11-11"], { last_time_zone: "Asia/Tokyo" });
+    const body = parse<{
+      final_through: string | null;
+      datasets: Record<string, unknown>[];
+    }>(await callTool(alice, "get_sync_status", { site_id: site.id }));
+    const [pages, queries, ga4] = body.datasets;
+    expect(pages).toMatchObject({
+      time_zone: "America/Los_Angeles",
+      time_zone_known: true,
+      expected_latest_date: "2026-11-10",
+      state_basis: "api",
+      refresh_days: 7,
+      final_through: "2026-10-31",
+    });
+    expect((pages?.recent_days as { date: string; state: string }[]).slice(0, 6)).toEqual([
+      { date: "2026-10-28", state: "final", updating: false, row_count: 1, fetched_at: 1000, error_code: null },
+      { date: "2026-10-29", state: "final", updating: false, row_count: 1, fetched_at: 1000, error_code: null },
+      { date: "2026-10-30", state: "final", updating: false, row_count: 1, fetched_at: 1000, error_code: null },
+      { date: "2026-10-31", state: "final", updating: false, row_count: 1, fetched_at: 1000, error_code: null },
+      { date: "2026-11-01", state: "provisional", updating: false, row_count: 1, fetched_at: 1000, error_code: null },
+      { date: "2026-11-02", state: "missing", updating: false, row_count: null, fetched_at: null, error_code: null },
+    ]);
+    expect(queries).toMatchObject({ expected_latest_date: "2026-11-10", final_through: null });
+    expect(ga4).toMatchObject({
+      time_zone: "Asia/Tokyo",
+      time_zone_known: true,
+      expected_latest_date: "2026-11-11",
+      state_basis: "elapsed_days",
+      refresh_days: 10,
+      final_through: null,
+    });
+    expect(body.final_through).toBeNull();
+  });
+
   it("answers not_found for a missing site or an ID of another form", async () => {
     for (const id of ["site_01JC9Z7H2K4M6N8P0Q2R4S6T8V", "x"]) {
       expect(toolErrorOf(await callTool(alice, "get_sync_status", { site_id: id }))).toEqual({
@@ -316,11 +357,16 @@ describe("query_search_performance", () => {
         refreshing_days: 1,
         missing_dates: ["2026-10-03"],
         missing_dates_truncated: false,
+        provisional_dates: ["2026-10-02"],
+        provisional_dates_truncated: false,
         time_zone: "America/Los_Angeles",
       },
       previous: null,
     });
-    expect(body.notes).toEqual(["Search Console の日付は太平洋時間です。"]);
+    expect(body.notes).toEqual([
+      "Search Console の日付は太平洋時間です。",
+      "速報値の日（provisional_dates）は今後変わることがあります。",
+    ]);
   });
 
   it("orders by impressions, limits the rows and keeps the totals of every row", async () => {
@@ -388,6 +434,17 @@ describe("query_search_performance", () => {
     ]);
     expect(body.coverage.current).toMatchObject({ days: 33, missing_dates_truncated: false });
     expect((body.coverage.current.missing_dates as string[]).length).toBe(31);
+  });
+
+  it("returns the provisional dates in order, up to 31", async () => {
+    const dates = Array.from({ length: 32 }, (_, i) => new Date(Date.UTC(2026, 6, 1 + i)).toISOString().slice(0, 10));
+    await insertDays(site.id, "gsc_pages", GSC, dates.reverse(), { last_data_state: "provisional" });
+    const body = parse<SearchBody>(await query({ start_date: "2026-07-01", end_date: "2026-10-03" }));
+    expect(body.coverage.current).toMatchObject({ provisional_days: 33, provisional_dates_truncated: true });
+    const provisional = body.coverage.current.provisional_dates as string[];
+    expect(provisional).toHaveLength(31);
+    expect(provisional[0]).toBe("2026-07-01");
+    expect(provisional[30]).toBe("2026-07-31");
   });
 
   it("marks missing_dates as truncated beyond 31 days", async () => {
@@ -515,6 +572,23 @@ describe("query_landing_sessions", () => {
     expect(body.notes).toEqual([
       "GA4 の日付はプロパティのタイムゾーンです。",
       "key_events は GA4 でキーイベントに設定したイベントの数で、問い合わせや受注の件数と同じとは限りません。",
+      "GA4 の確定は API で判定できないため、経過日数による推定です。",
+    ]);
+    expect(body.coverage.current).toMatchObject({ provisional_days: 0, provisional_dates: [], provisional_dates_truncated: false });
+  });
+
+  it("returns the provisional days of either period and notes them", async () => {
+    await insertDays(site.id, "ga4_landing_pages", GA4, ["2026-09-01"], { last_data_state: "provisional" });
+    const body = parse<SessionsBody>(
+      await query({ start_date: "2026-10-01", end_date: "2026-10-02", compare_start_date: "2026-09-01", compare_end_date: "2026-09-02" }),
+    );
+    expect(body.coverage.current).toMatchObject({ provisional_dates: [] });
+    expect(body.coverage.previous).toMatchObject({ provisional_dates: ["2026-09-01"], provisional_dates_truncated: false });
+    expect(body.notes).toEqual([
+      "GA4 の日付はプロパティのタイムゾーンです。",
+      "key_events は GA4 でキーイベントに設定したイベントの数で、問い合わせや受注の件数と同じとは限りません。",
+      "GA4 の確定は API で判定できないため、経過日数による推定です。",
+      "速報値の日（provisional_dates）は今後変わることがあります。",
     ]);
   });
 

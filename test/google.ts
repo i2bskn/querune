@@ -83,13 +83,13 @@ export function fakeGoogle(): FakeGoogle {
   return google;
 }
 
-// The rows of a Search Analytics response: keys and the metrics.
-export function gscRows(count: number, dataset: "gsc_pages" | "gsc_queries", from = 0) {
+// The rows of a Search Analytics response grouped by date first: keys and the metrics.
+export function gscRows(count: number, dataset: "gsc_pages" | "gsc_queries", date: string, from = 0) {
   return Array.from({ length: count }, (_, i) => ({
     keys:
       dataset === "gsc_pages"
-        ? [`https://example.com/p/${from + i}`]
-        : [`https://example.com/p/${Math.floor((from + i) / 10)}`, `query ${from + i}`],
+        ? [date, `https://example.com/p/${from + i}`]
+        : [date, `https://example.com/p/${Math.floor((from + i) / 10)}`, `query ${from + i}`],
     clicks: (from + i) % 7,
     impressions: 10 + ((from + i) % 13),
     ctr: 0.1,
