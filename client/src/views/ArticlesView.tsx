@@ -42,7 +42,7 @@ export function ArticlesView({ client, siteId, path }: { client: ApiClient; site
         <div className="page-head-text">
           <p className="eyebrow">{site.name}</p>
           <h1>記事</h1>
-          <p className="lead">記事の台帳です。URL を登録した記事は開くと検索とセッションの推移を見られます。</p>
+          <p className="lead">記事の台帳です。サービス紹介などの固定ページも登録できます。サイトマップに新しく載ったページは毎日自動で登録します。URL を登録した記事は開くと検索とセッションの推移を見られます。</p>
         </div>
         {!adding && !importing && (
           <div className="page-head-actions">
@@ -161,7 +161,7 @@ function ArticleList({ articles, site }: { articles: ArticleSummary[]; site: Sit
               <span className="article-url mono">{article.url === null ? "URL 未設定" : shortUrl(article.url, site.url)}</span>
             </span>
             <span className="article-date">
-              {article.published_on === null ? <span className="pill">未公開</span> : formatDate(article.published_on)}
+              {article.published_on === null ? <span className="pill">公開日なし</span> : formatDate(article.published_on)}
             </span>
             <Tags tags={article.tags} />
           </Link>

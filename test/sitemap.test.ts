@@ -450,34 +450,47 @@ describe("readPage", () => {
     expect(await readPage(`${ORIGIN}/r1`, ORIGIN, { remaining: 10 }, fetcher)).toEqual({
       ok: false,
       error: "リダイレクトが多すぎます",
+      retryable: false,
     });
     expect(await readPage(`${ORIGIN}/out`, ORIGIN, { remaining: 10 }, fetcher)).toEqual({
       ok: false,
       error: "サイトの外へリダイレクトされました",
+      retryable: false,
     });
     expect(await readPage(`${ORIGIN}/gone`, ORIGIN, { remaining: 10 }, fetcher)).toEqual({
       ok: false,
       error: "ページを取得できませんでした（HTTP 410）",
+      retryable: false,
     });
     expect(await readPage(`${ORIGIN}/no-location`, ORIGIN, { remaining: 10 }, fetcher)).toEqual({
       ok: false,
       error: "ページを取得できませんでした（HTTP 302）",
+      retryable: true,
     });
     expect(await readPage(`${ORIGIN}/empty`, ORIGIN, { remaining: 10 }, fetcher)).toEqual({
       ok: false,
       error: "ページを取得できませんでした（HTTP 204）",
+      retryable: true,
     });
   });
 
   it("fails when the fetches run out", async () => {
     const { fetcher, calls } = fakeFetcher({ [page]: redirect(`${ORIGIN}/posts/b`) });
-    expect(await readPage(page, ORIGIN, { remaining: 1 }, fetcher)).toEqual({ ok: false, error: importMessages.budget });
+    expect(await readPage(page, ORIGIN, { remaining: 1 }, fetcher)).toEqual({
+      ok: false,
+      error: importMessages.budget,
+      retryable: true,
+    });
     expect(calls).toEqual([page]);
   });
 
   it("fails on a page that is not HTML", async () => {
     const { fetcher } = fakeFetcher({ [page]: html("{}", "application/json") });
-    expect(await readPage(page, ORIGIN, { remaining: 5 }, fetcher)).toEqual({ ok: false, error: "HTML のページではありません" });
+    expect(await readPage(page, ORIGIN, { remaining: 5 }, fetcher)).toEqual({
+      ok: false,
+      error: "HTML のページではありません",
+      retryable: false,
+    });
   });
 
   it("fails on a charset other than UTF-8", async () => {
@@ -485,13 +498,14 @@ describe("readPage", () => {
     expect(await readPage(page, ORIGIN, { remaining: 5 }, header.fetcher)).toEqual({
       ok: false,
       error: "UTF-8 以外の文字コードのページは取り込めません",
+      retryable: false,
     });
     const meta = fakeFetcher({ [page]: html(`<meta charset="shift_jis"><title>x</title>`, "text/html") });
-    expect(await readPage(page, ORIGIN, { remaining: 5 }, meta.fetcher)).toMatchObject({ ok: false });
+    expect(await readPage(page, ORIGIN, { remaining: 5 }, meta.fetcher)).toMatchObject({ ok: false, retryable: false });
     const equiv = fakeFetcher({
       [page]: html(`<meta http-equiv="Content-Type" content="text/html; charset=EUC-JP"><title>x</title>`, "text/html"),
     });
-    expect(await readPage(page, ORIGIN, { remaining: 5 }, equiv.fetcher)).toMatchObject({ ok: false });
+    expect(await readPage(page, ORIGIN, { remaining: 5 }, equiv.fetcher)).toMatchObject({ ok: false, retryable: false });
     const utf8 = fakeFetcher({ [page]: html(`<meta charset="UTF-8"><title>ok</title>`, "text/html") });
     expect(await readPage(page, ORIGIN, { remaining: 5 }, utf8.fetcher)).toMatchObject({ ok: true, title: "ok" });
   });

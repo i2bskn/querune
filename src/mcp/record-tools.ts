@@ -153,7 +153,7 @@ export function registerRecordTools(server: McpServer, deps: ToolDeps): void {
     {
       title: "List articles",
       description:
-        "サイトの記事の台帳を返します。公開日のない記事が先、続いて公開日の新しい順です。各記事に備考の先頭 200 文字（note_preview）を付けます。全文は get_article で読めます。next_offset が null でなければ、offset に指定して続きを読めます。" +
+        "サイトの記事の台帳を返します。台帳にはブログ記事のほか、サービス紹介などの固定ページも登録されていることがあります。固定ページは公開日が空のことが多いです。サイトマップに新しく載ったページは毎日自動で登録されます（タグと備考は空）。公開日のない記事が先、続いて公開日の新しい順です。各記事に備考の先頭 200 文字（note_preview）を付けます。全文は get_article で読めます。next_offset が null でなければ、offset に指定して続きを読めます。" +
         CONTENT_DATA_NOTE,
       inputSchema: listArticlesInput,
       annotations: readOnlyAnnotations,
@@ -265,7 +265,7 @@ export function registerRecordTools(server: McpServer, deps: ToolDeps): void {
     {
       title: "Create article",
       description:
-        "サイトの記事の台帳に記事を登録し、登録した記事を返します。URL は同じサイトの中で重複できません。公開前で URL のない記事も登録できます。" +
+        "サイトの記事の台帳に記事を登録し、登録した記事を返します。URL は同じサイトの中で重複できません。公開前で URL のない記事も登録できます。サービス紹介などの固定ページも記事として登録できます。公開日がなければ空にします。" +
         WRITE_NOTE +
         CONTENT_DATA_NOTE,
       inputSchema: createArticleInput,

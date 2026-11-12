@@ -709,7 +709,26 @@ export function extractPublishedOn(html: string): string | null {
   return articleTimeDate(html);
 }
 
-export type PageResult = { ok: true; url: string; title: string; publishedOn: string | null } | { ok: false; error: string };
+// retryable: the failure may go away when the page is read again later (no response, a timeout, an HTTP status
+// other than 410, the budget). false for the failures that stay: HTTP 410, not HTML, not UTF-8, a redirect off the
+// site, too many redirects. Used by the daily article sync (src/sync/articles.ts), not by the manual import.
+export type PageResult =
+  | { ok: true; url: string; title: string; publishedOn: string | null }
+  | { ok: false; error: string; retryable: boolean };
+
+// Whether a failure of fetchWithinOrigin may go away later (see PageResult).
+function isRetryableFailure(failure: FetchFailure): boolean {
+  switch (failure.kind) {
+    case "http":
+      return failure.status !== 410;
+    case "network":
+    case "budget":
+      return true;
+    case "offsite":
+    case "redirects":
+      return false;
+  }
+}
 
 function pageFailureMessage(failure: FetchFailure): string {
   switch (failure.kind) {
@@ -735,26 +754,28 @@ export async function readPage(
   fetcher: typeof fetch = globalFetcher,
 ): Promise<PageResult> {
   const fetched = await fetchWithinOrigin(url, origin, PAGE_ACCEPT, budget, fetcher);
-  if (!fetched.ok) return { ok: false, error: pageFailureMessage(fetched.failure) };
+  if (!fetched.ok) {
+    return { ok: false, error: pageFailureMessage(fetched.failure), retryable: isRetryableFailure(fetched.failure) };
+  }
   const { res, signal } = fetched;
   const contentType = (res.headers.get("Content-Type") ?? "").trim().toLowerCase();
   if (!contentType.startsWith("text/html") && !contentType.startsWith("application/xhtml+xml")) {
     discard(res);
-    return { ok: false, error: importMessages.notHtml };
+    return { ok: false, error: importMessages.notHtml, retryable: false };
   }
   if (!isUtf8(charsetOf(contentType))) {
     discard(res);
-    return { ok: false, error: importMessages.charset };
+    return { ok: false, error: importMessages.charset, retryable: false };
   }
   let bytes: Uint8Array = new Uint8Array(0);
   if (res.body !== null) {
     const body = await readLimited(res.body, PAGE_MAX_BYTES, "truncate", signal, false);
-    if (!body.ok) return { ok: false, error: importMessages.network };
+    if (!body.ok) return { ok: false, error: importMessages.network, retryable: true };
     bytes = body.bytes;
   }
   const decoder = new TextDecoder("utf-8");
   if (!isUtf8(metaCharset(decoder.decode(bytes.subarray(0, CHARSET_SNIFF_BYTES))))) {
-    return { ok: false, error: importMessages.charset };
+    return { ok: false, error: importMessages.charset, retryable: false };
   }
   const html = decoder.decode(bytes);
   const finalUrl = normalizeArticleUrl(fetched.url);

@@ -55,7 +55,7 @@ export function ArticleDetailView({ client, id }: { client: ApiClient; id: strin
       <header className="page-head">
         <div className="page-head-text">
           <p className="eyebrow">
-            {article.published_on === null ? "未公開" : `${formatDate(article.published_on)} 公開`}
+            {article.published_on === null ? "公開日なし" : `${formatDate(article.published_on)} 公開`}
           </p>
           <h1>{article.title}</h1>
           {article.url !== null && (

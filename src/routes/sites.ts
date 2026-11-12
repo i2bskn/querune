@@ -13,7 +13,16 @@ import type {
 } from "../api/types";
 import { apiError, clock, describeError, isUniqueViolation, jsonBody, type Db } from "@i2bskn/workers-app-core";
 import { requireUser } from "../core";
-import { articles, DATASETS, pendingPurges, sites, syncDays, type ArticleRow, type SiteRow } from "../db/schema";
+import {
+  articles,
+  DATASETS,
+  pendingPurges,
+  sitemapUrls,
+  sites,
+  syncDays,
+  type ArticleRow,
+  type SiteRow,
+} from "../db/schema";
 import type { AppEnv } from "../env";
 import { parseServiceAccountKey } from "../google/credentials";
 import { ARTICLE_ID_PATTERN, newSiteId, newUlid, SITE_ID_PATTERN } from "../ids";
@@ -299,23 +308,29 @@ const sitesApi = new Hono<AppEnv>()
         purges.push({ id: newUlid(now), siteId: id, dataset, property: change.before, createdAt: now, attemptedAt: now });
       }
     }
+    // A new URL of the site forgets the URLs seen in the old sitemap: the next article sync records the new one first
+    // instead of registering all of its URLs as new pages.
+    const urlChanged = input.url !== undefined && input.url !== current.url;
     try {
       const update = db
         .update(sites)
         .set({ ...input, updatedAt: now })
         .where(eq(sites.id, id));
-      if (changes.length === 0) {
+      if (changes.length === 0 && !urlChanged) {
         await update.run();
       } else {
-        // The days of the old property are forgotten with the change, and its rows are deleted later by the purges:
-        // reads use only the rows of the current property.
-        const statements: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] = [
-          update,
-          db
-            .delete(syncDays)
-            .where(and(eq(syncDays.siteId, id), inArray(syncDays.dataset, changes.flatMap((change) => change.datasets)))),
-        ];
+        const statements: [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]] = [update];
+        if (changes.length > 0) {
+          // The days of the old property are forgotten with the change, and its rows are deleted later by the
+          // purges: reads use only the rows of the current property.
+          statements.push(
+            db
+              .delete(syncDays)
+              .where(and(eq(syncDays.siteId, id), inArray(syncDays.dataset, changes.flatMap((change) => change.datasets)))),
+          );
+        }
         if (purges.length > 0) statements.push(db.insert(pendingPurges).values(purges));
+        if (urlChanged) statements.push(db.delete(sitemapUrls).where(eq(sitemapUrls.siteId, id)));
         await db.batch(statements);
       }
     } catch (error) {
@@ -341,7 +356,8 @@ const sitesApi = new Hono<AppEnv>()
     const purgeIds = DATASETS.map(() => newUlid(now));
     // The purges are inserted before the site is deleted, and only while it exists, so that a concurrent deletion
     // leaves no purge behind. The imported rows are deleted later by the purges: deleting them here could exceed the
-    // D1 limits. The articles, memos and their links are deleted with the site by ON DELETE CASCADE.
+    // D1 limits. The articles, memos and their links are deleted with the site by ON DELETE CASCADE. sync_days and
+    // sitemap_urls are deleted here (sitemap_urls also has the cascade).
     const results = await d1.batch([
       ...DATASETS.map((dataset, i) =>
         d1
@@ -352,6 +368,7 @@ const sitesApi = new Hono<AppEnv>()
           .bind(purgeIds[i], id, dataset, now, now, id),
       ),
       d1.prepare("DELETE FROM sync_days WHERE site_id = ?").bind(id),
+      d1.prepare("DELETE FROM sitemap_urls WHERE site_id = ?").bind(id),
       d1.prepare("DELETE FROM sites WHERE id = ? RETURNING id").bind(id),
     ]);
     const deleted = results[results.length - 1]?.results.length ?? 0;

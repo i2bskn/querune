@@ -5,7 +5,7 @@ import { check, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex
 export { users, sessions, type UserRow, type SessionRow } from "@i2bskn/workers-app-core/schema";
 
 // The sites shown to every user. No column refers to a user, so deleting a user leaves the sites in place.
-// articles and memos refer to this table with ON DELETE CASCADE. A migration that rebuilds this table (copy, DROP
+// articles, memos and sitemap_urls refer to this table with ON DELETE CASCADE. A migration that rebuilds this table (copy, DROP
 // TABLE and rename, as drizzle-kit generates for some column changes) deletes the rows that refer to it, because D1
 // runs migrations in a transaction where PRAGMA foreign_keys=OFF has no effect. Check generated migrations for DROP
 // TABLE.
@@ -210,3 +210,19 @@ export const memoArticles = sqliteTable(
 
 export type ArticleRow = typeof articles.$inferSelect;
 export type MemoRow = typeof memos.$inferSelect;
+
+// URLs seen in the sitemap of a site by the daily article sync. A URL seen once is never registered again by the
+// sync, so that an article deleted by a user does not come back. Rows are never deleted except with the site (or
+// when the URL of the site changes).
+export const sitemapUrls = sqliteTable(
+  "sitemap_urls",
+  {
+    siteId: text("site_id")
+      .notNull()
+      .references(() => sites.id, { onDelete: "cascade" }),
+    url: text("url").notNull(),
+    // epoch ms.
+    seenAt: integer("seen_at").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.siteId, t.url] })],
+);

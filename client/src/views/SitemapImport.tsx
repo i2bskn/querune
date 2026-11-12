@@ -140,6 +140,9 @@ export function SitemapImport({
         <h2 className="panel-title">サイトマップから取り込む</h2>
         <p className="hint">サイトマップの URL を読み、選んだページのタイトルと公開日を記事に登録します。</p>
         <p className="hint">登録済みで公開日が空の記事は、選ぶと公開日だけを補います。</p>
+        <p className="hint">
+          毎日の自動登録の対象は新しく載ったページだけです。以前から載っているページや削除した記事はここから取り込んでください。
+        </p>
         <label className="field">
           <span className="field-label">サイトマップの URL</span>
           <input

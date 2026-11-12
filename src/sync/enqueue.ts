@@ -12,7 +12,9 @@ export type Dataset = (typeof DATASETS)[number];
 
 // One page (offset, a multiple of PAGE_ROWS) of one import of a day and dataset, or the purge of pending_purges.
 // incomplete: an earlier page of a Search Console import was marked incomplete by the API. acceptEmpty: zero rows
-// replace the rows of an earlier import (a manual import). Both are left out when false.
+// replace the rows of an earlier import (a manual import). Both are left out when false. articles_sitemap and
+// articles_import are the daily article sync (src/sync/articles.ts): reading the sitemap of a site, and registering
+// 1 to MAX_IMPORT_URLS of its pages.
 export type SyncMessage =
   | {
       kind: "sync";
@@ -25,7 +27,9 @@ export type SyncMessage =
       incomplete?: boolean;
       acceptEmpty?: boolean;
     }
-  | { kind: "purge"; purgeId: string };
+  | { kind: "purge"; purgeId: string }
+  | { kind: "articles_sitemap"; siteId: string }
+  | { kind: "articles_import"; siteId: string; urls: string[] };
 
 // force: asks for the day again even if it succeeded with final data. Defaults to the force of enqueueSync.
 export type SyncCandidate = { siteId: string; dataset: Dataset; date: string; property: string; force?: boolean };

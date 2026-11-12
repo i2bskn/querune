@@ -163,6 +163,26 @@ export async function createArticle(db: Db, siteId: string, input: ArticleInput,
   return { ok: true, value: created };
 }
 
+export type RegisteredArticle = { id: string; dated: boolean };
+
+// The articles of the site by URL (the articles without a URL are only counted): the count gives the room left, and
+// the map tells the registered URLs and whether their article has a published date. At most MAX_ARTICLES_PER_SITE
+// rows, so one query and a Map.
+export async function siteArticleUrls(
+  db: Db,
+  siteId: string,
+): Promise<{ count: number; urls: Map<string, RegisteredArticle> }> {
+  const { results } = await db.$client
+    .prepare("SELECT id, url, published_on FROM articles WHERE site_id = ?")
+    .bind(siteId)
+    .all<{ id: string; url: string | null; published_on: string | null }>();
+  const urls = new Map<string, RegisteredArticle>();
+  for (const row of results) {
+    if (row.url !== null) urls.set(row.url, { id: row.id, dated: row.published_on !== null });
+  }
+  return { count: results.length, urls };
+}
+
 // Changes the given items and updated_at. previous is the article before the change.
 export async function updateArticle(
   db: Db,

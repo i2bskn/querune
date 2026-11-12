@@ -6,9 +6,9 @@
 // writes nothing. Rows are upserted, and the last page deletes the rows that the import did not write. An import
 // that returns no rows for a day that had rows fails (empty_response) and keeps them, unless the message accepts it
 // (acceptEmpty, a manual import). A purge message deletes the rows left by a deleted site or an old property, 5,000
-// rows at a time.
+// rows at a time. The articles_sitemap and articles_import messages are the daily article sync (src/sync/articles.ts).
 
-import { clock, describeError } from "@i2bskn/workers-app-core";
+import { clock, createDb, describeError, type Db } from "@i2bskn/workers-app-core";
 import { DATASETS } from "../db/schema";
 import { loadConfig, type Bindings } from "../env";
 import { PAGE_ROWS, truncateMessage, type GoogleFailure } from "../google/api";
@@ -16,6 +16,9 @@ import { fetchLandingPage } from "../google/analytics";
 import { getGoogleAccessToken } from "../google/credentials";
 import { fetchSearchAnalyticsPage } from "../google/search-console";
 import { SITE_ID_PATTERN, ULID_PATTERN } from "../ids";
+import { normalizeArticleUrl } from "../records/validate";
+import { MAX_IMPORT_URLS } from "../sitemap";
+import { importArticlePages, syncArticleSitemap } from "./articles";
 import { addDays, isUsableTimeZone, isValidDate, todayIn } from "./dates";
 import { propertyOf, type Dataset, type SyncMessage } from "./enqueue";
 import { SEARCH_CONSOLE_TIME_ZONE } from "./time-zones";
@@ -121,6 +124,8 @@ function upsertSql(dataset: Dataset): string {
 
 type SyncDeps = {
   db: D1Database;
+  // The same database through drizzle, for src/records/.
+  orm: Db;
   queue: Queue<SyncMessage>;
   serviceAccountKey: string | undefined;
   fetcher: typeof fetch;
@@ -136,6 +141,17 @@ export function parseSyncMessage(body: unknown): SyncMessage | null {
     return typeof record.purgeId === "string" && ULID.test(record.purgeId)
       ? { kind: "purge", purgeId: record.purgeId }
       : null;
+  }
+  if (record.kind === "articles_sitemap") {
+    return typeof record.siteId === "string" && SITE_ID_PATTERN.test(record.siteId)
+      ? { kind: "articles_sitemap", siteId: record.siteId }
+      : null;
+  }
+  if (record.kind === "articles_import") {
+    const { siteId, urls } = record;
+    if (typeof siteId !== "string" || !SITE_ID_PATTERN.test(siteId)) return null;
+    const parsedUrls = parseImportUrls(urls);
+    return parsedUrls === null ? null : { kind: "articles_import", siteId, urls: parsedUrls };
   }
   if (record.kind !== "sync") return null;
   const { siteId, dataset, date, property, runId, offset, incomplete, acceptEmpty } = record;
@@ -154,6 +170,20 @@ export function parseSyncMessage(body: unknown): SyncMessage | null {
   if (incomplete === true && dataset !== "ga4_landing_pages") parsed.incomplete = true;
   if (acceptEmpty === true) parsed.acceptEmpty = true;
   return parsed;
+}
+
+// The URLs of an articles_import message: 1 to MAX_IMPORT_URLS distinct strings, each already normalized. null
+// otherwise. Whether they are on the origin of the site is checked when the message is processed.
+function parseImportUrls(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_IMPORT_URLS) return null;
+  const urls: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") return null;
+    const url = normalizeArticleUrl(item);
+    if (!url.ok || url.value === null || url.value !== item || urls.includes(item)) return null;
+    urls.push(item);
+  }
+  return urls;
 }
 
 // 60 seconds doubling with each try, up to an hour.
@@ -462,6 +492,18 @@ async function processMessage(deps: SyncDeps, message: Message<unknown>): Promis
     }
     return;
   }
+  if (parsed.kind === "articles_sitemap" || parsed.kind === "articles_import") {
+    const articleDeps = { db: deps.orm, queue: deps.queue, fetcher: deps.fetcher };
+    try {
+      if (parsed.kind === "articles_sitemap") await syncArticleSitemap(articleDeps, parsed.siteId);
+      else await importArticlePages(articleDeps, parsed.siteId, parsed.urls);
+      message.ack();
+    } catch (error) {
+      console.error("article sync failed", { kind: parsed.kind, siteId: parsed.siteId, ...describeError(error) });
+      message.retry({ delaySeconds: UNEXPECTED_RETRY_SECONDS });
+    }
+    return;
+  }
   try {
     await sync(deps, message, parsed);
   } catch (error) {
@@ -476,7 +518,8 @@ async function processMessage(deps: SyncDeps, message: Message<unknown>): Promis
 }
 
 // A message that the sync consumer could not finish within max_retries. The import is recorded as failed if it is
-// still the current one. A purge is left to the daily cron, which sends it again.
+// still the current one. A purge is left to the daily cron, which sends it again. A message of the article sync is
+// only logged: its URLs are not recorded, so the next day reads them again.
 async function processDeadLetter(deps: SyncDeps, message: Message<unknown>): Promise<void> {
   const parsed = parseSyncMessage(message.body);
   if (parsed === null) {
@@ -485,6 +528,11 @@ async function processDeadLetter(deps: SyncDeps, message: Message<unknown>): Pro
     return;
   }
   if (parsed.kind === "purge") {
+    message.ack();
+    return;
+  }
+  if (parsed.kind === "articles_sitemap" || parsed.kind === "articles_import") {
+    console.error("article sync dead-lettered", { kind: parsed.kind, siteId: parsed.siteId });
     message.ack();
     return;
   }
@@ -518,6 +566,7 @@ export async function handleSyncQueue(
   }
   const deps: SyncDeps = {
     db: env.DB,
+    orm: createDb(env.DB),
     queue: env.SYNC_QUEUE,
     serviceAccountKey: env.GOOGLE_SERVICE_ACCOUNT_KEY,
     fetcher: options.fetcher ?? ((input, init) => fetch(input, init)),

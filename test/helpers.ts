@@ -53,6 +53,7 @@ const APP_TABLES = [
   "ga4_landing_daily",
   "sync_days",
   "pending_purges",
+  "sitemap_urls",
   "memo_articles",
   "memos",
   "articles",

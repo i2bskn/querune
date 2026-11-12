@@ -21,7 +21,7 @@ import { apiError, clock, jsonBody, type Db } from "@i2bskn/workers-app-core";
 import { sites, type SiteRow } from "../db/schema";
 import type { AppEnv } from "../env";
 import { SITE_ID_PATTERN } from "../ids";
-import { createArticle, findArticle, listArticles } from "../records/articles";
+import { createArticle, findArticle, listArticles, siteArticleUrls, type RegisteredArticle } from "../records/articles";
 import { siteNotFound, type Failure } from "../records/common";
 import { createMemo, listMemos, listTags } from "../records/memos";
 import {
@@ -50,6 +50,7 @@ import {
   type FetchBudget,
   type PageResult,
 } from "../sitemap";
+import { mapConcurrently } from "../sync/articles";
 
 const factory = createFactory<AppEnv>();
 
@@ -163,23 +164,6 @@ function originOf(url: string): string | null {
   }
 }
 
-type RegisteredArticle = { id: string; dated: boolean };
-
-// The articles of the site by URL (the articles without a URL are only counted): the count gives the room left, and
-// the map tells the registered URLs and whether their article has a published date. At most MAX_ARTICLES_PER_SITE
-// rows, so one query and a Map.
-async function siteArticleUrls(db: Db, siteId: string): Promise<{ count: number; urls: Map<string, RegisteredArticle> }> {
-  const { results } = await db.$client
-    .prepare("SELECT id, url, published_on FROM articles WHERE site_id = ?")
-    .bind(siteId)
-    .all<{ id: string; url: string | null; published_on: string | null }>();
-  const urls = new Map<string, RegisteredArticle>();
-  for (const row of results) {
-    if (row.url !== null) urls.set(row.url, { id: row.id, dated: row.published_on !== null });
-  }
-  return { count: results.length, urls };
-}
-
 // Sets the published date of a registered article that has none. null when the article is gone or got a date in the
 // meantime (the date set by someone else is kept).
 async function fillPublishedOn(db: Db, id: string, publishedOn: string, now: number): Promise<Article | null> {
@@ -260,20 +244,6 @@ const importBody = recordsJsonBody<ImportArticlesRequest, { urls: string[] }>((b
   return { ok: true, value: { urls } };
 });
 
-// Runs task on every item with at most limit at a time. The results are in the order of the items.
-async function mapConcurrently<T, R>(items: T[], limit: number, task: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array<R>(items.length);
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) {
-      const index = next++;
-      results[index] = await task(items[index] as T);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
-}
-
 export const importSiteArticles = factory.createHandlers(importBody, async (c) => {
   const { urls } = c.req.valid("json");
   const db = c.get("db");
@@ -288,14 +258,14 @@ export const importSiteArticles = factory.createHandlers(importBody, async (c) =
   // A registered article is read again only to fill its missing published date.
   const pages = await mapConcurrently(urls, IMPORT_CONCURRENCY, async (url): Promise<PageResult | "exists"> => {
     if (existing.urls.get(url)?.dated === true) return "exists";
-    if (Date.now() >= deadline) return { ok: false, error: importMessages.budget };
+    if (Date.now() >= deadline) return { ok: false, error: importMessages.budget, retryable: true };
     return readPage(url, site.url, budget);
   });
   const now = clock.now();
   const results: ImportArticleResult[] = [];
   let limitReached = false;
   for (const [i, url] of urls.entries()) {
-    const page = pages[i] ?? { ok: false, error: importMessages.budget };
+    const page = pages[i] ?? { ok: false, error: importMessages.budget, retryable: true };
     if (page === "exists") {
       results.push({ url, status: "exists" });
       continue;

@@ -4,7 +4,7 @@ Queruneを開発する場合の、技術スタック・ローカル開発・デ�
 
 ## 技術スタック
 
-Cloudflare Workers + Hono + D1（drizzle-orm）で動き、MCPのOAuthの状態はKVに置きます。Search ConsoleとGA4の取り込みと、取り込んだデータの削除はQueues（`querune-sync`、DLQは`querune-sync-dlq`）で少しずつ処理し、毎日の取り込みはCron Triggers（18:00 UTCと6:00 UTC）で始めます。言語はTypeScript、パッケージ管理はpnpm、テストは`@cloudflare/vitest-plugin`、Web画面はReact + Viteです。
+Cloudflare Workers + Hono + D1（drizzle-orm）で動き、MCPのOAuthの状態はKVに置きます。Search ConsoleとGA4の取り込みと、取り込んだデータの削除はQueues（`querune-sync`、DLQは`querune-sync-dlq`）で少しずつ処理し、毎日の取り込みはCron Triggers（18:00 UTCと6:00 UTC）で始めます。サイトマップからの記事の自動登録も同じキューで処理し、18:00 UTCのCron Triggerで始めます。言語はTypeScript、パッケージ管理はpnpm、テストは`@cloudflare/vitest-plugin`、Web画面はReact + Viteです。
 
 ログイン、ユーザー管理、MCPのOAuth認可サーバー（`@cloudflare/workers-oauth-provider`、`@modelcontextprotocol/sdk`）は[`@i2bskn/workers-app-core`](https://github.com/i2bskn/workers-app-core)を使っています（`src/core.ts`）。
 
@@ -16,6 +16,12 @@ Freeプランの上限の中で動くように作っていますが、行数の�
 - 毎日の取り込みは、サイトあたり18:00 UTCにおよそ24メッセージ（Search Console 2データセット×7日＋GA4 10日）と直近30日の取り直しの日です。6:00 UTCには直近5日のうち確定していない日の数だけ送ります。1日2,000行を超える日は、ページ数だけメッセージが増えます。
 - 18:00 UTCの取り込みは直近の日を確定でも毎日取り直すため、その日の行をすべて書き直します。D1の書き込み行数はおおむね（直近の日数×1日の行数）だけ増えます。
 - 毎日の取り込みは、GA4のタイムゾーンと取り直す日を探すために`sync_days`を全件読みます。読み取り行数はおおむね`sync_days`の行数の2倍です。
+- 記事の自動登録は、18:00 UTCに1サイトあたり1メッセージを送ります。新しいURLがあればさらに最大10メッセージ（10件ずつ）を送ります。どれも同じキューのSearch Console・GA4の取り込みの後ろに並びます。
+- 自動登録の1メッセージは、ページの取得が最大35回・サイトマップの取得が最大25回です（Freeプランの外部へのfetchの上限50の内）。1メッセージに最大40秒程度かかります。
+- 大きなサイトマップや重いページは、WorkersのFreeプランのCPU時間を超えることがあります。超えると再試行を繰り返し、5回でDLQへ送られます。手動の取り込みと同じ既知の制約で、対処はしていません。ページは10件ずつ登録するため、超えるページを含む10件は毎日同じ組み合わせで失敗することがあります。
+- 自動登録が見たURLを記録する`sitemap_urls`は、サイトマップのURLの数だけ行が増えます。サイトマップから消えたURLの行も、サイトの削除かサイトのURLの変更まで残ります。
+- `sitemap_urls`は複合主キーのため、1URLあたり本体と索引でおよそ2行を書き込みます。初回は1サイト最大およそ10,000行です。デプロイ直後の18:00 UTCには全サイトの初回がまとめて走り、D1の1日10万行をSearch Console・GA4の取り込みと分け合います。
+- サイトマップの一部しか読めないサイトでは、記事の自動登録は始まりません。
 - 1回の手動の取り込みは最大90日で、3データセットなら270メッセージ以上（1日2,000行を超える日はさらに増える）です。
 - WorkersのFreeプランは1回の実行のCPU時間が10msで、行数の多い日や多数のサイトでは処理が打ち切られることがあります。
 - D1のFreeプランは1日あたり書き込み10万行・読み取り500万行、1データベース500MBです。取り込む行数はおおむね書き込み行数になります。MCPのクエリ別の集計は1回でおおよそ（日数×1日の行数、比較するならその2倍）行を読みます。
