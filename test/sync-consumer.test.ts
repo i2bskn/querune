@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clock } from "@i2bskn/workers-app-core";
-import type { SiteRow } from "../src/db/schema";
+import { isGa4Dataset, type SiteRow } from "../src/db/schema";
 import { PAGE_ROWS } from "../src/google/api";
 import { clearGoogleTokenCache } from "../src/google/credentials";
 import { newUlid } from "../src/ids";
@@ -20,7 +20,7 @@ import {
   type FakeMessage,
   type FakeQueue,
 } from "./helpers";
-import { fakeGoogle, ga4Rows, gscRows, sharedServiceAccount, type FakeGoogle } from "./google";
+import { fakeGoogle, ga4PageRows, ga4Rows, gscRows, sharedServiceAccount, type FakeGoogle } from "./google";
 
 const GSC = "sc-domain:example.com";
 const GA4 = "123456789";
@@ -45,6 +45,7 @@ type DayRow = {
   last_row_count: number | null;
   last_truncated: number | null;
   last_time_zone: string | null;
+  last_thresholded: number | null;
 };
 
 let now: number;
@@ -78,7 +79,7 @@ function testEnv(overrides: Partial<Cloudflare.Env> = {}): Cloudflare.Env {
 async function queueDay(
   dataset: Dataset,
   date = FINAL_DATE,
-  property = dataset === "ga4_landing_pages" ? GA4 : GSC,
+  property = isGa4Dataset(dataset) ? GA4 : GSC,
   options: { acceptEmpty?: boolean } = {},
 ) {
   const sending = fakeQueue();
@@ -962,5 +963,183 @@ describe("purge", () => {
     const message = await deliver({ kind: "purge", purgeId }, { db: failing });
     expect(message.retried).toEqual({ delaySeconds: 300 });
     expect(error).toHaveBeenCalledWith("purge failed", expect.objectContaining({ purgeId }));
+  });
+});
+
+describe("GA4 page views (ga4_pages)", () => {
+  // Answers runReport with total rows of ga4_pages, PAGE_ROWS per page. metadata is returned with the pages for which
+  // metadataOf returns it.
+  function pageViewAnswers(
+    total: number,
+    date: string,
+    metadataOf: (offset: number) => Record<string, unknown> = () => ({ timeZone: "Asia/Tokyo" }),
+  ) {
+    google.api = (call) => {
+      const body = call.body as { offset: number; limit: number };
+      const count = Math.max(0, Math.min(body.limit, total - body.offset));
+      return Response.json({
+        ...(count > 0 ? { rows: ga4PageRows(count, date, body.offset) } : {}),
+        rowCount: total,
+        metadata: metadataOf(body.offset),
+      });
+    };
+  }
+
+  it("imports the views by host name and page path and records the day", async () => {
+    pageViewAnswers(3, FINAL_DATE);
+    const first = await queueDay("ga4_pages");
+    expect(first.property).toBe(GA4);
+    expect((await deliver(first)).acked).toBe(true);
+    expect(google.calls[0]?.url).toBe("https://analyticsdata.googleapis.com/v1beta/properties/123456789:runReport");
+    expect(google.calls[0]?.body).toEqual({
+      dateRanges: [{ startDate: FINAL_DATE, endDate: FINAL_DATE }],
+      dimensions: [{ name: "date" }, { name: "hostName" }, { name: "pagePath" }],
+      metrics: [{ name: "screenPageViews" }, { name: "userEngagementDuration" }],
+      orderBys: [{ dimension: { dimensionName: "hostName" } }, { dimension: { dimensionName: "pagePath" } }],
+      limit: PAGE_ROWS,
+      offset: 0,
+      keepEmptyRows: false,
+    });
+    const { results } = await env.DB.prepare(
+      `SELECT property, date, host_name, page_path, views, engagement_seconds, typeof(views) AS t_views,
+        typeof(engagement_seconds) AS t_seconds, run_id FROM ga4_page_daily ORDER BY page_path`,
+    ).all();
+    expect(results).toEqual([
+      { property: GA4, date: FINAL_DATE, host_name: "example.com", page_path: "/p/0", views: 3, engagement_seconds: 12.5, t_views: "integer", t_seconds: "real", run_id: first.runId },
+      { property: GA4, date: FINAL_DATE, host_name: "example.com", page_path: "/p/1", views: 4, engagement_seconds: 12.5, t_views: "integer", t_seconds: "real", run_id: first.runId },
+      { property: GA4, date: FINAL_DATE, host_name: "example.com", page_path: "/p/2", views: 5, engagement_seconds: 12.5, t_views: "integer", t_seconds: "real", run_id: first.runId },
+    ]);
+    expect(await day("ga4_pages")).toMatchObject({
+      status: "succeeded",
+      last_data_state: "final",
+      last_row_count: 3,
+      last_time_zone: "Asia/Tokyo",
+      last_thresholded: 0,
+    });
+    // The landing pages are another dataset.
+    expect(await countTable("ga4_landing_daily")).toBe(0);
+    expect(await day("ga4_landing_pages")).toBeNull();
+  });
+
+  it("imports several pages, and deletes the rows that a later import did not write", async () => {
+    pageViewAnswers(4001, FINAL_DATE);
+    const delivered = await deliverAll(await queueDay("ga4_pages"));
+    expect(delivered.map((m) => m.offset)).toEqual([0, 2000, 4000]);
+    expect(await countTable("ga4_page_daily")).toBe(4001);
+    now += HOUR;
+    pageViewAnswers(2, FINAL_DATE);
+    const second = await queueDay("ga4_pages");
+    await deliver(second);
+    const { results } = await env.DB.prepare("SELECT page_path, run_id FROM ga4_page_daily ORDER BY page_path").all();
+    expect(results).toEqual([
+      { page_path: "/p/0", run_id: second.runId },
+      { page_path: "/p/1", run_id: second.runId },
+    ]);
+    expect(await day("ga4_pages")).toMatchObject({ status: "succeeded", last_row_count: 2, last_succeeded_at: now });
+  });
+
+  it("decides provisional days up to 4 days ago in the time zone of the property", async () => {
+    pageViewAnswers(1, "2026-11-01");
+    await deliver(await queueDay("ga4_pages", "2026-11-01"));
+    expect(await day("ga4_pages", "2026-11-01")).toMatchObject({ last_data_state: "provisional", last_time_zone: "Asia/Tokyo" });
+    pageViewAnswers(1, "2026-10-31");
+    await deliver(await queueDay("ga4_pages", "2026-10-31"));
+    expect(await day("ga4_pages", "2026-10-31")).toMatchObject({ last_data_state: "final", last_time_zone: "Asia/Tokyo" });
+  });
+
+  it("carries the thresholded mark of an earlier page to the last page", async () => {
+    pageViewAnswers(4001, FINAL_DATE, (offset) =>
+      offset === 0 ? { timeZone: "Asia/Tokyo", subjectToThresholding: true } : { timeZone: "Asia/Tokyo" },
+    );
+    const delivered = await deliverAll(await queueDay("ga4_pages"));
+    expect(delivered.map((m) => m.thresholded)).toEqual([undefined, true, true]);
+    expect(await day("ga4_pages")).toMatchObject({ status: "succeeded", last_thresholded: 1 });
+  });
+
+  it("records an (other) row on the last page as thresholded, and clears it on the next import", async () => {
+    pageViewAnswers(1, FINAL_DATE, () => ({ timeZone: "Asia/Tokyo", dataLossFromOtherRow: true }));
+    await deliver(await queueDay("ga4_pages"));
+    expect((await day("ga4_pages"))?.last_thresholded).toBe(1);
+    now += HOUR;
+    pageViewAnswers(1, FINAL_DATE, () => ({ timeZone: "Asia/Tokyo", subjectToThresholding: false, dataLossFromOtherRow: false }));
+    await deliver(await queueDay("ga4_pages"));
+    expect((await day("ga4_pages"))?.last_thresholded).toBe(0);
+  });
+
+  it("records the thresholded mark for ga4_landing_pages, and none for Search Console", async () => {
+    google.api = () =>
+      Response.json({ rows: ga4Rows(1, FINAL_DATE), metadata: { timeZone: "Asia/Tokyo", subjectToThresholding: true } });
+    await deliver(await queueDay("ga4_landing_pages"));
+    expect((await day("ga4_landing_pages"))?.last_thresholded).toBe(1);
+    gscAnswers(1, "gsc_pages");
+    await deliver(await queueDay("gsc_pages"));
+    expect(await day("gsc_pages")).toMatchObject({ status: "succeeded", last_thresholded: null });
+  });
+
+  it("accepts messages without thresholded, ignores it for Search Console, and rejects values that are not booleans", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    pageViewAnswers(2001, FINAL_DATE);
+    const first = await queueDay("ga4_pages");
+    expect(first).not.toHaveProperty("thresholded");
+    // A follow-up sent before thresholded existed: counted as not thresholded.
+    await deliver(first);
+    expect(queue.messages[0]).not.toHaveProperty("thresholded");
+    const bad = await deliver({ ...first, thresholded: "yes" });
+    expect(bad.acked).toBe(true);
+    expect(error).toHaveBeenCalledWith("sync message is malformed", expect.anything());
+    gscAnswers(2001, "gsc_pages");
+    const gsc = await queueDay("gsc_pages");
+    await deliver({ ...gsc, thresholded: true });
+    expect(queue.messages.at(-1)).not.toHaveProperty("thresholded");
+  });
+
+  it("keeps the rows of a day that had rows when Google returns none, unless the import is manual", async () => {
+    pageViewAnswers(3, FINAL_DATE);
+    await deliver(await queueDay("ga4_pages"));
+    now += HOUR;
+    pageViewAnswers(0, FINAL_DATE);
+    await deliver(await queueDay("ga4_pages"));
+    expect(await day("ga4_pages")).toMatchObject({ status: "failed", error_code: "empty_response", last_row_count: 3 });
+    expect(await countTable("ga4_page_daily")).toBe(3);
+    await deliver(await queueDay("ga4_pages", FINAL_DATE, GA4, { acceptEmpty: true }));
+    expect(await day("ga4_pages")).toMatchObject({ status: "succeeded", last_row_count: 0 });
+    expect(await countTable("ga4_page_daily")).toBe(0);
+  });
+
+  it("retries a 5xx, records an invalid response, and records the day as failed from the dead letter queue", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    google.api = () => new Response("unavailable", { status: 503 });
+    const first = await queueDay("ga4_pages");
+    const retried = await deliver(first);
+    expect(retried.retried).toEqual({ delaySeconds: 60 });
+    expect((await day("ga4_pages"))?.status).toBe("running");
+    google.api = () =>
+      Response.json({
+        rows: [{ dimensionValues: [{ value: "20261020" }, { value: "example.com" }, { value: "/" }], metricValues: [{ value: "x" }, { value: "1" }] }],
+      });
+    await deliver(first);
+    expect(await day("ga4_pages")).toMatchObject({ status: "failed", error_code: "invalid_response", last_succeeded_at: null });
+    const again = await queueDay("ga4_pages");
+    await deliver(again, { queueName: SYNC_DEAD_LETTER_QUEUE });
+    expect(await day("ga4_pages")).toMatchObject({ status: "failed", error_code: "retry_exhausted" });
+  });
+
+  it("purges the rows of an old property", async () => {
+    await env.DB.prepare(
+      `INSERT INTO ga4_page_daily (site_id, property, date, host_name, page_path, views, engagement_seconds, run_id)
+      VALUES (?1, '999', '2026-10-01', 'example.com', '/a', 1, 1, 'r'), (?1, ?2, '2026-10-01', 'example.com', '/a', 2, 2, 'r')`,
+    )
+      .bind(site.id, GA4)
+      .run();
+    const purgeId = newUlid(now);
+    await env.DB.prepare(
+      "INSERT INTO pending_purges (id, site_id, dataset, property, created_at, attempted_at) VALUES (?, ?, 'ga4_pages', '999', ?, NULL)",
+    )
+      .bind(purgeId, site.id, now)
+      .run();
+    expect((await deliver({ kind: "purge", purgeId })).acked).toBe(true);
+    const { results } = await env.DB.prepare("SELECT property FROM ga4_page_daily").all();
+    expect(results).toEqual([{ property: GA4 }]);
+    expect(await countTable("pending_purges")).toBe(0);
   });
 });

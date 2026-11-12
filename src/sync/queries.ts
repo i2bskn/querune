@@ -140,6 +140,9 @@ export type Coverage = {
   time_zone: string | null;
   // Only when the available days have more than one time zone.
   time_zones?: string[];
+  // Only with withThresholded (ga4_pages): the available days whose last import was subject to GA4 thresholding or
+  // had an "(other)" row.
+  thresholded_days?: number;
 };
 
 const MISSING_DATES_LIMIT = 31;
@@ -152,18 +155,30 @@ type CoverageRow = {
   last_data_state: string | null;
   last_truncated: number | null;
   last_time_zone: string | null;
+  last_thresholded?: number | null;
 };
 
 // The import state of the days of a period, and how to read it. fixedTimeZone is the time zone of every day of the
-// dataset (Search Console); without it, the time zone of the latest successful import is used.
+// dataset (Search Console); without it, the time zone of the latest successful import is used. withThresholded adds
+// thresholded_days; without it the result has no such key.
 export function coverageStatement(
   db: D1Database,
-  params: { siteId: string; dataset: Dataset; property: string; period: Period; fixedTimeZone: string | null },
+  params: {
+    siteId: string;
+    dataset: Dataset;
+    property: string;
+    period: Period;
+    fixedTimeZone: string | null;
+    withThresholded?: boolean;
+  },
 ): { statement: D1PreparedStatement; read: (rows: Record<string, unknown>[]) => Coverage } {
   const { period } = params;
+  const withThresholded = params.withThresholded === true;
   const statement = db
     .prepare(
-      `SELECT date, status, last_succeeded_at, last_data_state, last_truncated, last_time_zone FROM sync_days
+      `SELECT date, status, last_succeeded_at, last_data_state, last_truncated, last_time_zone${
+        withThresholded ? ", last_thresholded" : ""
+      } FROM sync_days
       WHERE site_id = ? AND dataset = ? AND property = ? AND date >= ? AND date <= ?`,
     )
     .bind(params.siteId, params.dataset, params.property, period.start, period.end);
@@ -192,6 +207,7 @@ export function coverageStatement(
       provisional_dates_truncated: provisional.length > PROVISIONAL_DATES_LIMIT,
       time_zone: params.fixedTimeZone,
     };
+    if (withThresholded) coverage.thresholded_days = available.filter((row) => row.last_thresholded === 1).length;
     if (params.fixedTimeZone === null) {
       let latest: CoverageRow | null = null;
       const zones = new Set<string>();
@@ -206,4 +222,32 @@ export function coverageStatement(
     return coverage;
   };
   return { statement, read };
+}
+
+// The page paths that match a path given by a user or taken from a URL: the path itself and, when it differs, the path
+// with its percent-encoded characters decoded. GA4 may return pagePath either way (not documented). %2F, %3F and %23
+// (/, ? and #) stay encoded, so that "/a%2Fb" does not match the different page "/a/b". The other characters are
+// decoded with decodeURIComponent; a path that cannot be decoded matches only itself.
+export function pagePathVariants(path: string): string[] {
+  const parts = path.split(/(%2F|%3F|%23)/i);
+  let decoded: string;
+  try {
+    // Odd indexes are the kept separators.
+    decoded = parts.map((part, i) => (i % 2 === 1 ? part : decodeURIComponent(part))).join("");
+  } catch {
+    return [path];
+  }
+  return decoded === path ? [path] : [path, decoded];
+}
+
+// The host name and the path of an article URL, as GA4 reports them in hostName and pagePath; null for an invalid
+// URL. The trailing slash and the case of the path are kept: "/a" and "/a/" can be different pages.
+export function ga4PageOf(url: string | null): { host_name: string; page_path: string } | null {
+  if (url === null) return null;
+  try {
+    const parsed = new URL(url);
+    return { host_name: parsed.hostname, page_path: parsed.pathname };
+  } catch {
+    return null;
+  }
 }

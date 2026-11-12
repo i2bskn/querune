@@ -449,20 +449,24 @@ describe("POST /api/v1/sites/:id/sync", () => {
     const start = addDays(end, -2);
     const res = await syncRequest(site.id, { start_date: start, end_date: end });
     expect(res.status).toBe(202);
-    expect(await res.json()).toEqual({ queued: 9, days: 3 });
-    expect(queue.messages).toHaveLength(9);
+    expect(await res.json()).toEqual({ queued: 12, days: 3 });
+    expect(queue.messages).toHaveLength(12);
     expect(queue.messages).toContainEqual(
       expect.objectContaining({ kind: "sync", siteId: site.id, dataset: "ga4_landing_pages", date: start, property: GA4, offset: 0 }),
     );
+    expect(queue.messages).toContainEqual(
+      expect.objectContaining({ kind: "sync", siteId: site.id, dataset: "ga4_pages", date: start, property: GA4, offset: 0 }),
+    );
     // A manual import accepts a day without rows.
     expect(queue.messages.every((m) => m.kind === "sync" && m.acceptEmpty === true)).toBe(true);
-    expect(await countTable("sync_days")).toBe(9);
+    expect(await countTable("sync_days")).toBe(12);
   });
 
   it("queues the GA4 property alone, and today", async () => {
     const site = await createSite({ ga4PropertyId: GA4 });
     const res = await syncRequest(site.id, { start_date: today(), end_date: today() });
-    expect(await res.json()).toEqual({ queued: 1, days: 1 });
+    expect(await res.json()).toEqual({ queued: 2, days: 1 });
+    expect(queue.messages.map((m) => (m.kind === "sync" ? m.dataset : "")).sort()).toEqual(["ga4_landing_pages", "ga4_pages"]);
   });
 
   it("asks for succeeded days again (force)", async () => {
@@ -478,7 +482,9 @@ describe("POST /api/v1/sites/:id/sync", () => {
     const site = await createSite({ gscProperty: GSC, ga4PropertyId: GA4 });
     const cutoff = subtractMonths(today(), 16);
     const res = await syncRequest(site.id, { start_date: addDays(cutoff, -5), end_date: addDays(cutoff, 4) });
-    expect(await res.json()).toEqual({ queued: 20, days: 10 });
+    expect(await res.json()).toEqual({ queued: 30, days: 10 });
+    const ga4PagesDates = queue.messages.filter((m) => m.kind === "sync" && m.dataset === "ga4_pages");
+    expect(ga4PagesDates).toHaveLength(10);
     const gscDates = queue.messages.filter((m) => m.kind === "sync" && m.dataset === "gsc_pages").map((m) => (m.kind === "sync" ? m.date : ""));
     expect(gscDates.sort()).toEqual([0, 1, 2, 3, 4].map((n) => addDays(cutoff, n)));
   });
@@ -655,6 +661,27 @@ describe("GET /api/v1/sites/:id/sync", () => {
           recent_days: [],
           final_through: null,
         },
+        {
+          dataset: "ga4_pages",
+          configured: false,
+          property: null,
+          latest_date: null,
+          provisional_from: null,
+          last_succeeded_at: null,
+          available_days: 0,
+          truncated_days: 0,
+          queued: 0,
+          running: 0,
+          failed: 0,
+          recent_failures: [],
+          time_zone: null,
+          time_zone_known: false,
+          expected_latest_date: null,
+          state_basis: null,
+          refresh_days: 0,
+          recent_days: [],
+          final_through: null,
+        },
       ],
       final_through: null,
     });
@@ -722,10 +749,11 @@ describe("getSyncStatus", () => {
     await insertDays(site.id, datesFrom("2026-10-28", 14), { dataset: "gsc_queries" });
     await insertDays(site.id, datesFrom("2026-10-29", 10), { dataset: "ga4_landing_pages", property: GA4, last_time_zone: "Asia/Tokyo" });
     await insertDay(site.id, { date: "2026-11-08", dataset: "ga4_landing_pages", property: GA4, status: "queued" });
+    await insertDays(site.id, datesFrom("2026-10-29", 14), { dataset: "ga4_pages", property: GA4, last_time_zone: "Asia/Tokyo" });
     const { d1, count } = d1Counting();
     const status = await getSyncStatus(d1, { id: site.id, gscProperty: GSC, ga4PropertyId: GA4 }, NOW);
     expect(count()).toBe(1);
-    const [pages, queries, ga4] = status.datasets;
+    const [pages, queries, ga4, ga4Pages] = status.datasets;
     expect(pages).toMatchObject({ expected_latest_date: "2026-11-10", final_through: "2026-11-08" });
     expect(queries).toMatchObject({ expected_latest_date: "2026-11-10", final_through: "2026-11-10" });
     expect(ga4).toMatchObject({
@@ -737,7 +765,29 @@ describe("getSyncStatus", () => {
       final_through: "2026-11-07",
     });
     expect(ga4?.recent_days[0]?.date).toBe("2026-10-29");
+    expect(ga4Pages).toMatchObject({
+      time_zone: "Asia/Tokyo",
+      expected_latest_date: "2026-11-11",
+      state_basis: "elapsed_days",
+      refresh_days: 10,
+      final_through: "2026-11-11",
+    });
     expect(status.final_through).toBe("2026-11-07");
+  });
+
+  it("includes ga4_pages in final_through of the site", async () => {
+    const site = await createSite({ ga4PropertyId: GA4 });
+    await insertDays(site.id, datesFrom("2026-10-29", 14), { dataset: "ga4_landing_pages", property: GA4, last_time_zone: "Asia/Tokyo" });
+    const before = await getSyncStatus(env.DB, { id: site.id, gscProperty: null, ga4PropertyId: GA4 }, NOW);
+    expect(before.datasets.map((d) => d.dataset)).toEqual(["gsc_pages", "gsc_queries", "ga4_landing_pages", "ga4_pages"]);
+    expect(before.datasets[2]?.final_through).toBe("2026-11-11");
+    // The time zone recorded by ga4_landing_pages is used for ga4_pages as well.
+    expect(before.datasets[3]).toMatchObject({ time_zone: "Asia/Tokyo", expected_latest_date: "2026-11-11", final_through: null });
+    // Not imported yet: the site has no final_through until the days of ga4_pages are imported.
+    expect(before.final_through).toBeNull();
+    await insertDays(site.id, datesFrom("2026-10-29", 12), { dataset: "ga4_pages", property: GA4, last_time_zone: "Asia/Tokyo" });
+    const after = await getSyncStatus(env.DB, { id: site.id, gscProperty: null, ga4PropertyId: GA4 }, NOW);
+    expect(after.final_through).toBe("2026-11-09");
   });
 
   it("uses yesterday in Etc/GMT+12 while the time zone of the GA4 property is not known", async () => {
@@ -773,6 +823,7 @@ describe("imported data on property changes and deletion", () => {
   async function seed(siteId: string): Promise<void> {
     for (const dataset of ["gsc_pages", "gsc_queries"]) await insertDay(siteId, { date: "2026-10-01", dataset });
     await insertDay(siteId, { date: "2026-10-01", dataset: "ga4_landing_pages", property: GA4 });
+    await insertDay(siteId, { date: "2026-10-01", dataset: "ga4_pages", property: GA4 });
   }
 
   async function datasetsLeft(): Promise<string[]> {
@@ -796,7 +847,7 @@ describe("imported data on property changes and deletion", () => {
     await seed(site.id);
     const res = await patch(site.id, { gsc_property: "sc-domain:new.example.com" });
     expect(res.status).toBe(200);
-    expect(await datasetsLeft()).toEqual(["ga4_landing_pages"]);
+    expect(await datasetsLeft()).toEqual(["ga4_landing_pages", "ga4_pages"]);
     const rows = await purges();
     expect(rows.map(({ site_id, dataset, property }) => ({ site_id, dataset, property }))).toEqual([
       { site_id: site.id, dataset: "gsc_pages", property: GSC },
@@ -812,15 +863,18 @@ describe("imported data on property changes and deletion", () => {
     await seed(site.id);
     expect((await patch(site.id, { ga4_property_id: "" })).status).toBe(200);
     expect(await datasetsLeft()).toEqual(["gsc_pages", "gsc_queries"]);
-    expect((await purges()).map((row) => [row.dataset, row.property])).toEqual([["ga4_landing_pages", GA4]]);
-    expect(queue.messages).toHaveLength(1);
+    expect((await purges()).map((row) => [row.dataset, row.property])).toEqual([
+      ["ga4_landing_pages", GA4],
+      ["ga4_pages", GA4],
+    ]);
+    expect(queue.messages).toHaveLength(2);
   });
 
   it("creates no purge when a property is set for the first time", async () => {
     const site = await createSite({ ga4PropertyId: GA4 });
     await seed(site.id);
     expect((await patch(site.id, { gsc_property: GSC })).status).toBe(200);
-    expect(await datasetsLeft()).toEqual(["ga4_landing_pages"]);
+    expect(await datasetsLeft()).toEqual(["ga4_landing_pages", "ga4_pages"]);
     expect(await purges()).toEqual([]);
     expect(queue.messages).toEqual([]);
   });
@@ -829,7 +883,7 @@ describe("imported data on property changes and deletion", () => {
     const site = await createSite({ gscProperty: GSC, ga4PropertyId: GA4 });
     await seed(site.id);
     expect((await patch(site.id, { name: "Renamed", gsc_property: " SC-DOMAIN:Example.com ", ga4_property_id: GA4 })).status).toBe(200);
-    expect(await datasetsLeft()).toEqual(["ga4_landing_pages", "gsc_pages", "gsc_queries"]);
+    expect(await datasetsLeft()).toEqual(["ga4_landing_pages", "ga4_pages", "gsc_pages", "gsc_queries"]);
     expect(await purges()).toEqual([]);
   });
 
@@ -853,10 +907,11 @@ describe("imported data on property changes and deletion", () => {
     const rows = await purges();
     expect(rows.map(({ site_id, dataset, property }) => ({ site_id, dataset, property }))).toEqual([
       { site_id: site.id, dataset: "ga4_landing_pages", property: null },
+      { site_id: site.id, dataset: "ga4_pages", property: null },
       { site_id: site.id, dataset: "gsc_pages", property: null },
       { site_id: site.id, dataset: "gsc_queries", property: null },
     ]);
-    expect(queue.messages).toHaveLength(3);
+    expect(queue.messages).toHaveLength(4);
   });
 
   it("creates no purge when deleting a missing site", async () => {

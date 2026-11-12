@@ -1,5 +1,6 @@
 // The time zone of the dates of each dataset, and the latest date that the imports are expected to have.
 
+import { isGa4Dataset } from "../db/schema";
 import type { Dataset } from "./enqueue";
 import { isUsableTimeZone, yesterdayIn } from "./dates";
 
@@ -14,15 +15,15 @@ export function ga4TimeZoneKey(siteId: string, property: string): string {
   return `${siteId}\n${property}`;
 }
 
-// The time zone recorded by the latest successful GA4 import of each site and property (every site, or the one of
-// siteId), and how to read it. The values are not checked: use them through datasetDayOf.
+// The time zone recorded by the latest successful GA4 import (of either GA4 dataset) of each site and property (every
+// site, or the one of siteId), and how to read it. The values are not checked: use them through datasetDayOf.
 export function ga4TimeZonesStatement(
   db: D1Database,
   siteId: string | null,
 ): { statement: D1PreparedStatement; read: (rows: Record<string, unknown>[]) => Map<string, string> } {
   // With MAX, SQLite takes the bare columns from the row with the maximum.
   const sql = `SELECT site_id, property, last_time_zone, MAX(last_succeeded_at) AS at FROM sync_days
-    WHERE dataset = 'ga4_landing_pages' AND last_succeeded_at IS NOT NULL AND last_time_zone IS NOT NULL
+    WHERE dataset IN ('ga4_landing_pages', 'ga4_pages') AND last_succeeded_at IS NOT NULL AND last_time_zone IS NOT NULL
     ${siteId === null ? "" : "AND site_id = ?"}
     GROUP BY site_id, property`;
   const statement = siteId === null ? db.prepare(sql) : db.prepare(sql).bind(siteId);
@@ -49,7 +50,7 @@ export type DatasetDay = {
 // The time zone and the expected latest date of a dataset. ga4TimeZone is the time zone recorded for the current
 // GA4 property (ga4TimeZonesStatement), ignored for Search Console.
 export function datasetDayOf(dataset: Dataset, ga4TimeZone: string | null | undefined, now: number): DatasetDay {
-  if (dataset !== "ga4_landing_pages") {
+  if (!isGa4Dataset(dataset)) {
     return {
       timeZone: SEARCH_CONSOLE_TIME_ZONE,
       timeZoneKnown: true,

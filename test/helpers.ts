@@ -51,6 +51,7 @@ const APP_TABLES = [
   "gsc_page_daily",
   "gsc_query_daily",
   "ga4_landing_daily",
+  "ga4_page_daily",
   "sync_days",
   "pending_purges",
   "sitemap_urls",

@@ -1,7 +1,7 @@
 // The import state of a site (GET /api/v1/sites/:id/sync and the get_sync_status tool).
 
-import type { DatasetSyncStatus, RecentDay, SyncFailure, SyncStatus } from "../api/types";
-import { DATASETS } from "../db/schema";
+import type { DatasetSyncStatus, RecentDay, RecentDayState, SyncFailure, SyncStatus } from "../api/types";
+import { DATASETS, isGa4Dataset } from "../db/schema";
 import { addDays, todayUtc } from "./dates";
 import { propertyOf, REFRESH_DAYS, type Dataset, type SiteProperties } from "./enqueue";
 import { datasetDayOf, ga4TimeZoneKey, ga4TimeZonesStatement } from "./time-zones";
@@ -37,20 +37,27 @@ type RecentRow = {
   error_code: string | null;
 };
 
+// The state of a day from its sync_days row (undefined when the day has none for the current property): final or
+// provisional once imported successfully, otherwise failed, pending (queued or running) or missing.
+export function dayStateOf(
+  row: { status: string; last_succeeded_at: number | null; last_data_state: string | null } | undefined,
+): RecentDayState {
+  if (row === undefined) return "missing";
+  if (row.last_succeeded_at !== null) return row.last_data_state === "provisional" ? "provisional" : "final";
+  if (row.status === "failed") return "failed";
+  if (row.status === "queued" || row.status === "running") return "pending";
+  return "missing";
+}
+
 function recentDayOf(date: string, row: RecentRow | undefined): RecentDay {
   if (row === undefined) {
     return { date, state: "missing", updating: false, row_count: null, fetched_at: null, error_code: null };
   }
   const succeeded = row.last_succeeded_at !== null;
   const active = row.status === "queued" || row.status === "running";
-  let state: RecentDay["state"];
-  if (succeeded) state = row.last_data_state === "provisional" ? "provisional" : "final";
-  else if (row.status === "failed") state = "failed";
-  else if (active) state = "pending";
-  else state = "missing";
   return {
     date,
-    state,
+    state: dayStateOf(row),
     updating: succeeded && active,
     row_count: succeeded ? row.last_row_count : null,
     fetched_at: row.last_succeeded_at,
@@ -72,7 +79,7 @@ export async function getSyncStatus(db: D1Database, site: SiteProperties, now: n
   const ga4 = site.ga4PropertyId;
   // A NULL property matches nothing.
   const currentProperty = `site_id = ? AND (
-    (dataset IN ('gsc_pages', 'gsc_queries') AND property = ?) OR (dataset = 'ga4_landing_pages' AND property = ?)
+    (dataset IN ('gsc_pages', 'gsc_queries') AND property = ?) OR (dataset IN ('ga4_landing_pages', 'ga4_pages') AND property = ?)
   )`;
   const today = todayUtc(now);
   const zones = ga4TimeZonesStatement(db, site.id);
@@ -148,7 +155,7 @@ export async function getSyncStatus(db: D1Database, site: SiteProperties, now: n
       final_through: null,
     };
     if (property !== null) {
-      const ga4TimeZone = dataset === "ga4_landing_pages" ? ga4TimeZones.get(ga4TimeZoneKey(site.id, property)) : null;
+      const ga4TimeZone = isGa4Dataset(dataset) ? ga4TimeZones.get(ga4TimeZoneKey(site.id, property)) : null;
       const day = datasetDayOf(dataset, ga4TimeZone, now);
       const recent: RecentDay[] = [];
       for (let n = RECENT_DAYS - 1; n >= 0; n--) {
@@ -159,7 +166,7 @@ export async function getSyncStatus(db: D1Database, site: SiteProperties, now: n
         time_zone: day.timeZone,
         time_zone_known: day.timeZoneKnown,
         expected_latest_date: day.expectedLatestDate,
-        state_basis: dataset === "ga4_landing_pages" ? "elapsed_days" : "api",
+        state_basis: isGa4Dataset(dataset) ? "elapsed_days" : "api",
         refresh_days: REFRESH_DAYS[dataset],
         recent_days: recent,
         final_through: finalThrough(recent),

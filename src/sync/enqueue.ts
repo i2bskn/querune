@@ -2,7 +2,7 @@
 // (src/sync/consumer.ts). Also the crons, which import the recent days again.
 
 import { describeError } from "@i2bskn/workers-app-core";
-import { DATASETS } from "../db/schema";
+import { DATASETS, isGa4Dataset } from "../db/schema";
 import { parseServiceAccountKey } from "../google/credentials";
 import { newUlid } from "../ids";
 import { addDays, todayUtc } from "./dates";
@@ -11,8 +11,9 @@ import { datasetDayOf, ga4TimeZoneKey, ga4TimeZonesStatement } from "./time-zone
 export type Dataset = (typeof DATASETS)[number];
 
 // One page (offset, a multiple of PAGE_ROWS) of one import of a day and dataset, or the purge of pending_purges.
-// incomplete: an earlier page of a Search Console import was marked incomplete by the API. acceptEmpty: zero rows
-// replace the rows of an earlier import (a manual import). Both are left out when false. articles_sitemap and
+// incomplete: an earlier page of a Search Console import was marked incomplete by the API. thresholded: an earlier
+// page of a GA4 import was subject to thresholding or had an "(other)" row. acceptEmpty: zero rows replace the rows of
+// an earlier import (a manual import). Each is left out when false. articles_sitemap and
 // articles_import are the daily article sync (src/sync/articles.ts): reading the sitemap of a site, and registering
 // 1 to MAX_IMPORT_URLS of its pages.
 export type SyncMessage =
@@ -25,6 +26,7 @@ export type SyncMessage =
       runId: string;
       offset: number;
       incomplete?: boolean;
+      thresholded?: boolean;
       acceptEmpty?: boolean;
     }
   | { kind: "purge"; purgeId: string }
@@ -52,7 +54,12 @@ const PURGE_RESEND_LIMIT = 100;
 // The full cron imports again the last REFRESH_DAYS days to the expected latest date of each dataset, final or not,
 // and the provisional and failed days of the last DAILY_RETRY_DAYS. GA4 data can arrive up to 7 days late and take
 // up to 48 hours to process; Search Console marks its incomplete days, which are usually complete in 2 or 3 days.
-export const REFRESH_DAYS: Record<Dataset, number> = { gsc_pages: 7, gsc_queries: 7, ga4_landing_pages: 10 };
+export const REFRESH_DAYS: Record<Dataset, number> = {
+  gsc_pages: 7,
+  gsc_queries: 7,
+  ga4_landing_pages: 10,
+  ga4_pages: 10,
+};
 // The fresh cron imports the last FRESH_DAYS days that are not final.
 export const FRESH_DAYS = 5;
 const DAILY_RETRY_DAYS = 30;
@@ -83,11 +90,11 @@ export class EnqueueError extends Error {
 
 // The property of the dataset, or null if the site has none.
 export function propertyOf(site: SiteProperties, dataset: Dataset): string | null {
-  return dataset === "ga4_landing_pages" ? site.ga4PropertyId : site.gscProperty;
+  return isGa4Dataset(dataset) ? site.ga4PropertyId : site.gscProperty;
 }
 
-// The datasets that the site imports: gsc_pages and gsc_queries with a Search Console property, ga4_landing_pages
-// with a GA4 property.
+// The datasets that the site imports: gsc_pages and gsc_queries with a Search Console property, ga4_landing_pages and
+// ga4_pages with a GA4 property.
 export function datasetsOf(site: SiteProperties): Dataset[] {
   return DATASETS.filter((dataset) => propertyOf(site, dataset) !== null);
 }
@@ -259,7 +266,7 @@ async function enqueueRecentDays(deps: DailySyncDeps, mode: SyncMode): Promise<v
     byId.set(site.id, site);
     for (const dataset of datasetsOf(site)) {
       const property = propertyOf(site, dataset) as string;
-      const ga4TimeZone = dataset === "ga4_landing_pages" ? ga4TimeZones.get(ga4TimeZoneKey(site.id, property)) : null;
+      const ga4TimeZone = isGa4Dataset(dataset) ? ga4TimeZones.get(ga4TimeZoneKey(site.id, property)) : null;
       const expected = datasetDayOf(dataset, ga4TimeZone, now).expectedLatestDate;
       latest.set(`${site.id}\n${dataset}`, expected);
       for (let n = days(dataset) - 1; n >= 0; n--) {

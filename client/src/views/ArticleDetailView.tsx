@@ -23,6 +23,7 @@ import { BarRow, TrendChart } from "./charts";
 import { ViewStatus, useDocumentTitle, viewTitle } from "./common";
 import { Delta, KpiButton } from "./metrics";
 import { MemoPages } from "./MemosView";
+import { PageViewsPanel } from "./PageViews";
 import { UNKNOWN_RESULT_MESSAGE } from "./SitesView";
 
 const GONE_MESSAGE = "記事が見つかりません。削除された可能性があります";
@@ -334,6 +335,7 @@ function ArticleInsights({ client, article }: { client: ApiClient; article: Arti
           )}
         </section>
       )}
+      <PageViewsPanel insights={insights} siteId={article.site_id} siteUrl={null} muteChange={beforePublish} />
     </>
   );
 }

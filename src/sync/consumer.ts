@@ -9,10 +9,10 @@
 // rows at a time. The articles_sitemap and articles_import messages are the daily article sync (src/sync/articles.ts).
 
 import { clock, createDb, describeError, type Db } from "@i2bskn/workers-app-core";
-import { DATASETS } from "../db/schema";
+import { DATASETS, isGa4Dataset } from "../db/schema";
 import { loadConfig, type Bindings } from "../env";
 import { PAGE_ROWS, truncateMessage, type GoogleFailure } from "../google/api";
-import { fetchLandingPage } from "../google/analytics";
+import { fetchLandingPage, fetchPageViews } from "../google/analytics";
 import { getGoogleAccessToken } from "../google/credentials";
 import { fetchSearchAnalyticsPage } from "../google/search-console";
 import { SITE_ID_PATTERN, ULID_PATTERN } from "../ids";
@@ -93,6 +93,16 @@ export const DATASET_TABLES: Record<Dataset, DatasetTable> = {
     ],
     keys: ["landing_page", "channel_group"],
   },
+  ga4_pages: {
+    table: "ga4_page_daily",
+    columns: [
+      ["host_name", "text"],
+      ["page_path", "text"],
+      ["views", "integer"],
+      ["engagement_seconds", "real"],
+    ],
+    keys: ["host_name", "page_path"],
+  },
 };
 
 // The import of the message is still the current one: ?1 site_id, ?2 property, ?3 date, ?4 run_id, ?5 dataset.
@@ -154,7 +164,7 @@ export function parseSyncMessage(body: unknown): SyncMessage | null {
     return parsedUrls === null ? null : { kind: "articles_import", siteId, urls: parsedUrls };
   }
   if (record.kind !== "sync") return null;
-  const { siteId, dataset, date, property, runId, offset, incomplete, acceptEmpty } = record;
+  const { siteId, dataset, date, property, runId, offset, incomplete, thresholded, acceptEmpty } = record;
   if (typeof siteId !== "string" || !SITE_ID_PATTERN.test(siteId)) return null;
   if (typeof dataset !== "string" || !(DATASETS as readonly string[]).includes(dataset)) return null;
   if (!isValidDate(date)) return null;
@@ -164,10 +174,12 @@ export function parseSyncMessage(body: unknown): SyncMessage | null {
   if (offset >= MAX_ROWS_PER_DAY) return null;
   // Missing in the messages sent before these fields existed.
   if (incomplete !== undefined && typeof incomplete !== "boolean") return null;
+  if (thresholded !== undefined && typeof thresholded !== "boolean") return null;
   if (acceptEmpty !== undefined && typeof acceptEmpty !== "boolean") return null;
   const parsed: SyncBody = { kind: "sync", siteId, dataset: dataset as Dataset, date, property, runId, offset };
-  // incomplete only means something for Search Console.
-  if (incomplete === true && dataset !== "ga4_landing_pages") parsed.incomplete = true;
+  // incomplete only means something for Search Console, thresholded only for GA4.
+  if (incomplete === true && !isGa4Dataset(parsed.dataset)) parsed.incomplete = true;
+  if (thresholded === true && isGa4Dataset(parsed.dataset)) parsed.thresholded = true;
   if (acceptEmpty === true) parsed.acceptEmpty = true;
   return parsed;
 }
@@ -228,6 +240,8 @@ type FetchedPage = {
   dataState: "final" | "provisional";
   // Search Console: this page or an earlier one was marked incomplete. Always false for GA4.
   incomplete: boolean;
+  // GA4: this page or an earlier one was subject to thresholding or had an "(other)" row. null for Search Console.
+  thresholded: boolean | null;
   // The time zone recorded for the day; null when GA4 did not return a usable one.
   timeZone: string | null;
 };
@@ -239,8 +253,9 @@ async function fetchPage(
   accessToken: string,
   now: number,
 ): Promise<{ ok: true; page: FetchedPage } | GoogleFailure> {
-  if (m.dataset === "ga4_landing_pages") {
-    const res = await fetchLandingPage({
+  if (isGa4Dataset(m.dataset)) {
+    const fetchGa4 = m.dataset === "ga4_pages" ? fetchPageViews : fetchLandingPage;
+    const res = await fetchGa4({
       accessToken,
       property: m.property,
       date: m.date,
@@ -253,7 +268,15 @@ async function fetchPage(
     const provisional = m.date >= addDays(todayIn(timeZone ?? "UTC", now), -GA4_PROVISIONAL_DAYS);
     return {
       ok: true,
-      page: { rows: res.rows, dataState: provisional ? "provisional" : "final", incomplete: false, timeZone },
+      page: {
+        rows: res.rows,
+        dataState: provisional ? "provisional" : "final",
+        incomplete: false,
+        // Carried over from the earlier pages (m.thresholded), like incomplete for Search Console. A message sent
+        // before this field existed counts as not thresholded; the next import of the day corrects it.
+        thresholded: m.thresholded === true || res.thresholded,
+        timeZone,
+      },
     };
   }
   const res = await fetchSearchAnalyticsPage({
@@ -279,6 +302,7 @@ async function fetchPage(
       rows: res.rows,
       dataState: provisional ? "provisional" : "final",
       incomplete,
+      thresholded: null,
       timeZone: SEARCH_CONSOLE_TIME_ZONE,
     },
   };
@@ -394,6 +418,7 @@ async function sync(deps: SyncDeps, message: Message<unknown>, m: SyncBody): Pro
   if (full && m.offset + PAGE_ROWS < MAX_ROWS_PER_DAY) {
     const next: SyncBody = { ...m, offset: m.offset + PAGE_ROWS };
     if (page.incomplete) next.incomplete = true;
+    if (page.thresholded === true) next.thresholded = true;
     await deps.queue.send(next);
     message.ack();
     return;
@@ -413,7 +438,7 @@ async function sync(deps: SyncDeps, message: Message<unknown>, m: SyncBody): Pro
         `UPDATE sync_days SET status = 'succeeded', finished_at = ?, heartbeat_at = ?, error_code = NULL,
           error_message = NULL, last_succeeded_at = ?, last_data_state = ?,
           last_row_count = (SELECT COUNT(*) FROM ${table} WHERE site_id = ? AND property = ? AND date = ?),
-          last_truncated = ?, last_time_zone = ?
+          last_truncated = ?, last_time_zone = ?, last_thresholded = ?
         WHERE site_id = ? AND dataset = ? AND date = ? AND run_id = ? AND status = 'running'`,
       )
       .bind(
@@ -426,6 +451,7 @@ async function sync(deps: SyncDeps, message: Message<unknown>, m: SyncBody): Pro
         m.date,
         full ? 1 : 0,
         page.timeZone,
+        page.thresholded === null ? null : page.thresholded ? 1 : 0,
         m.siteId,
         m.dataset,
         m.date,

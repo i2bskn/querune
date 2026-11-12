@@ -16,6 +16,7 @@ import {
   type Invalid,
 } from "../records/validate";
 import { clock } from "@i2bskn/workers-app-core";
+import { ga4PageOf } from "../sync/queries";
 import { ok, readOnlyAnnotations, safely, toolError } from "./results";
 import type { ToolDeps } from "./tools";
 
@@ -183,7 +184,7 @@ export function registerRecordTools(server: McpServer, deps: ToolDeps): void {
     {
       title: "Get article",
       description:
-        "記事を 1 件、備考の全文とひも付くメモ（新しく作成された順に 50 件まで。本文は含みません）とともに返します。memos_total はひも付くメモの件数です。search_console_page（記事の URL）と ga4_landing_page（URL のパス）を query_search_performance の page と query_landing_sessions の landing_page に使えます。リダイレクト、末尾のスラッシュ、クエリ文字列のために、Search Console の URL や GA4 のパスが記事の URL と異なることがあります。" +
+        "記事を 1 件、備考の全文とひも付くメモ（新しく作成された順に 50 件まで。本文は含みません）とともに返します。memos_total はひも付くメモの件数です。search_console_page（記事の URL）と ga4_landing_page（URL のパス）を query_search_performance の page と query_landing_sessions の landing_page に使えます。ga4_page（URL のホスト名とパス。パスは URL の pathname のまま）の host_name と page_path を query_page_views に使えます。page_path はデコード版のパスにも一致します。リダイレクト、末尾のスラッシュ、クエリ文字列のために、Search Console の URL や GA4 のパスが記事の URL と異なることがあります。" +
         CONTENT_DATA_NOTE,
       inputSchema: getArticleInput,
       annotations: readOnlyAnnotations,
@@ -202,6 +203,7 @@ export function registerRecordTools(server: McpServer, deps: ToolDeps): void {
           memos_total: total,
           search_console_page: article.url,
           ga4_landing_page: landingPageOf(article.url),
+          ga4_page: ga4PageOf(article.url),
         });
       }),
   );

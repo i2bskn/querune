@@ -16,6 +16,7 @@ const DATASET_LABELS: Record<DatasetSyncStatus["dataset"], { source: string; det
   gsc_pages: { source: "Search Console", detail: "ページ別" },
   gsc_queries: { source: "Search Console", detail: "クエリ別" },
   ga4_landing_pages: { source: "GA4", detail: "ランディングページ × チャネル" },
+  ga4_pages: { source: "GA4", detail: "ページ別の表示回数" },
 };
 
 const DAY_STATE_LABELS: Record<RecentDay["state"], string> = {

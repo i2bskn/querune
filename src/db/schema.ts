@@ -25,8 +25,15 @@ export const sites = sqliteTable("sites", {
 export type SiteRow = typeof sites.$inferSelect;
 
 // The datasets that are imported for each site (src/sync/).
-export const DATASETS = ["gsc_pages", "gsc_queries", "ga4_landing_pages"] as const;
-const DATASET_CHECK = sql.raw("('gsc_pages', 'gsc_queries', 'ga4_landing_pages')");
+export const DATASETS = ["gsc_pages", "gsc_queries", "ga4_landing_pages", "ga4_pages"] as const;
+const DATASET_CHECK = sql.raw("('gsc_pages', 'gsc_queries', 'ga4_landing_pages', 'ga4_pages')");
+
+// The datasets imported from GA4: their property is the GA4 property ID and their dates are in its time zone.
+export const GA4_DATASETS = ["ga4_landing_pages", "ga4_pages"] as const satisfies readonly (typeof DATASETS)[number][];
+
+export function isGa4Dataset(dataset: (typeof DATASETS)[number]): dataset is (typeof GA4_DATASETS)[number] {
+  return (GA4_DATASETS as readonly string[]).includes(dataset);
+}
 
 // The imported rows. site_id refers to sites.id without a foreign key: the rows of a deleted site are removed later
 // through pending_purges. property is the property the row was imported from; reads use only the rows of the
@@ -87,6 +94,27 @@ export const ga4LandingDaily = sqliteTable(
   (t) => [primaryKey({ columns: [t.siteId, t.property, t.date, t.landingPage, t.channelGroup] })],
 );
 
+// GA4, by host name, page path and day: every view of a page, not only the first page of a session. property is the
+// GA4 property ID; date is in the time zone of the property.
+export const ga4PageDaily = sqliteTable(
+  "ga4_page_daily",
+  {
+    siteId: text("site_id").notNull(),
+    property: text("property").notNull(),
+    date: text("date").notNull(),
+    // hostName as GA4 returned it, including "(not set)".
+    hostName: text("host_name").notNull(),
+    // pagePath (a path without the query string) as GA4 returned it, including "(not set)".
+    pagePath: text("page_path").notNull(),
+    // screenPageViews.
+    views: integer("views").notNull(),
+    // userEngagementDuration, in seconds.
+    engagementSeconds: real("engagement_seconds").notNull(),
+    runId: text("run_id").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.siteId, t.property, t.date, t.hostName, t.pagePath] })],
+);
+
 // The import state of each day of each dataset of a site. The last_* columns describe the last successful import;
 // they and the imported rows stay while the day is imported again or when that fails.
 export const syncDays = sqliteTable(
@@ -117,6 +145,9 @@ export const syncDays = sqliteTable(
     lastTruncated: integer("last_truncated"),
     // America/Los_Angeles for Search Console, the time zone of the property for GA4.
     lastTimeZone: text("last_time_zone"),
+    // GA4: 1 when a page of the last successful import was subject to thresholding or had rows aggregated into
+    // "(other)", 0 otherwise. NULL for Search Console and for the days imported before this column existed.
+    lastThresholded: integer("last_thresholded"),
   },
   (t) => [
     primaryKey({ columns: [t.siteId, t.dataset, t.date] }),

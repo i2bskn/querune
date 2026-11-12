@@ -20,6 +20,7 @@ import { setCurrentSite } from "../siteContext";
 import { BarRow, type ChartTone, ShareBar, TrendChart } from "./charts";
 import { ViewStatus, useDocumentTitle, viewTitle } from "./common";
 import { Delta, KpiButton } from "./metrics";
+import { PageViewsPanel } from "./PageViews";
 
 const GONE_MESSAGE = "サイトが見つかりません。削除された可能性があります";
 export const PERIODS = [7, 28, 90] as const;
@@ -188,7 +189,10 @@ export function SiteDetailView({ client, id, path }: { client: ApiClient; id: st
   }
 
   const nothingConfigured = site.gsc_property === null && site.ga4_property_id === null;
-  const nothingImported = !hasRows(insights.search?.coverage) && !hasRows(insights.sessions?.coverage);
+  const nothingImported =
+    !hasRows(insights.search?.coverage) &&
+    !hasRows(insights.sessions?.coverage) &&
+    !hasRows(insights.page_views?.coverage);
 
   return (
     <main className="page page-wide">
@@ -305,6 +309,7 @@ export function SiteDetailView({ client, id, path }: { client: ApiClient; id: st
               <SessionTable rows={insights.sessions.landing_pages} />
             </>
           )}
+          <PageViewsPanel insights={insights} siteId={site.id} siteUrl={site.url} />
         </>
       )}
     </main>
@@ -328,6 +333,7 @@ function Freshness({ insights, siteId }: { insights: InsightsResponse; siteId: s
   const items: { label: string; coverage: InsightsCoverage }[] = [];
   if (insights.search !== null) items.push({ label: "Search Console", coverage: insights.search.coverage });
   if (insights.sessions !== null) items.push({ label: "GA4", coverage: insights.sessions.coverage });
+  if (insights.page_views !== null) items.push({ label: "GA4 表示回数", coverage: insights.page_views.coverage });
   return (
     <ul className="freshness" aria-label="データの状態">
       {items.map(({ label, coverage }) => {

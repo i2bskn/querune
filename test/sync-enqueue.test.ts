@@ -4,9 +4,12 @@ import type { SiteRow } from "../src/db/schema";
 import { newUlid } from "../src/ids";
 import { addDays } from "../src/sync/dates";
 import {
+  datasetsOf,
   EnqueueError,
   enqueueSync,
+  propertyOf,
   QUEUE_RETENTION_MS,
+  REFRESH_DAYS,
   runDailySync,
   STALE_RUNNING_MS,
   syncModeOf,
@@ -262,8 +265,9 @@ describe("runDailySync", () => {
     expect(sentDays("gsc_pages")).toEqual(datesFrom("2026-10-29", 7));
     expect(sentDays("gsc_queries")).toEqual(datesFrom("2026-10-29", 7));
     expect(sentDays("ga4_landing_pages")).toEqual(datesFrom("2026-10-26", 10));
+    expect(sentDays("ga4_pages")).toEqual(datesFrom("2026-10-26", 10));
     expect(queue.messages.filter((m) => m.kind === "sync" && m.siteId === gscOnly.id)).toHaveLength(14);
-    expect(queue.messages).toHaveLength(38);
+    expect(queue.messages).toHaveLength(48);
     // Only the manual imports accept a day without rows.
     expect(queue.messages.some((m) => m.kind === "sync" && m.acceptEmpty !== undefined)).toBe(false);
   });
@@ -415,7 +419,7 @@ describe("runDailySync", () => {
       await runDailySync({ db: d1, queue, now: FRESH_NOW, serviceAccountKey: key, mode: "fresh" });
       // The sites and the time zones (one batch), and the imports (one batch).
       expect(count()).toBe(2);
-      expect(queue.messages.length).toBe(100 * 15);
+      expect(queue.messages.length).toBe(100 * 20);
     });
   });
 
@@ -485,7 +489,7 @@ describe("runDailySync", () => {
     await run();
     expect(error).toHaveBeenCalledWith("daily sync failed", expect.objectContaining({ name: "EnqueueError" }));
     expect(queue.messages).toEqual([{ kind: "purge", purgeId }]);
-    expect(await countTable("sync_days")).toBe(24);
+    expect(await countTable("sync_days")).toBe(34);
   });
 
   it("makes 4 D1 queries with 100 sites", async () => {
@@ -495,6 +499,68 @@ describe("runDailySync", () => {
     await run(d1);
     // The sites and the time zones (one batch), the days to import again, the imports (one batch) and the purges.
     expect(count()).toBe(4);
-    expect(queue.messages.length).toBe(100 * 24 + 1);
+    expect(queue.messages.length).toBe(100 * 34 + 1);
+  });
+});
+
+describe("ga4_pages", () => {
+  let key: string;
+
+  beforeEach(async () => {
+    key = (await sharedServiceAccount()).key;
+  });
+
+  function sent(dataset: Dataset, siteId = site.id): string[] {
+    return queue.messages
+      .filter((m) => m.kind === "sync" && m.dataset === dataset && m.siteId === siteId)
+      .map((m) => (m.kind === "sync" ? m.date : ""))
+      .sort();
+  }
+
+  it("refreshes 10 days, like ga4_landing_pages", () => {
+    expect(REFRESH_DAYS.ga4_pages).toBe(10);
+    expect(REFRESH_DAYS.ga4_pages).toBe(REFRESH_DAYS.ga4_landing_pages);
+  });
+
+  it("is imported for the sites with a GA4 property only", () => {
+    expect(datasetsOf({ id: site.id, gscProperty: GSC, ga4PropertyId: GA4 })).toEqual([
+      "gsc_pages",
+      "gsc_queries",
+      "ga4_landing_pages",
+      "ga4_pages",
+    ]);
+    expect(datasetsOf({ id: site.id, gscProperty: GSC, ga4PropertyId: null })).toEqual(["gsc_pages", "gsc_queries"]);
+    expect(propertyOf({ id: site.id, gscProperty: GSC, ga4PropertyId: GA4 }, "ga4_pages")).toBe(GA4);
+  });
+
+  it("imports the 10 days to yesterday in the time zone recorded by either GA4 dataset (full)", async () => {
+    const gscOnly = await createSite({ gscProperty: "sc-domain:b.example.com" });
+    // 2026-11-11 18:00 UTC: 2026-11-12 03:00 in Tokyo.
+    const now = Date.UTC(2026, 10, 11, 18, 0, 0);
+    await insertDay({ dataset: "ga4_landing_pages", property: GA4, date: "2026-10-01", status: "succeeded", lastDataState: "final", timeZone: "Asia/Tokyo" });
+    await runDailySync({ db: env.DB, queue, now, serviceAccountKey: key, mode: "full" });
+    expect(sent("ga4_pages")).toEqual(datesFrom("2026-11-02", 10));
+    expect(sent("ga4_pages", gscOnly.id)).toEqual([]);
+    expect(queue.messages.filter((m) => m.kind === "sync" && m.dataset === "ga4_pages").every((m) => m.kind === "sync" && m.property === GA4)).toBe(true);
+  });
+
+  it("imports the last 5 days that are not final (fresh)", async () => {
+    // 2026-11-12 06:00 UTC: 2026-11-12 15:00 in Tokyo.
+    const now = Date.UTC(2026, 10, 12, 6, 0, 0);
+    // Only ga4_pages has recorded the time zone: it is used for both GA4 datasets.
+    await insertDay({ dataset: "ga4_pages", property: GA4, date: "2026-10-01", status: "succeeded", lastDataState: "final", timeZone: "Asia/Tokyo" });
+    await insertDay({ dataset: "ga4_pages", property: GA4, date: "2026-11-07", status: "succeeded", lastDataState: "final", timeZone: "Asia/Tokyo" });
+    await insertDay({ dataset: "ga4_pages", property: GA4, date: "2026-11-09", status: "failed", timeZone: "Asia/Tokyo" });
+    await runDailySync({ db: env.DB, queue, now, serviceAccountKey: key, mode: "fresh" });
+    expect(sent("ga4_pages")).toEqual(["2026-11-08", "2026-11-09", "2026-11-10", "2026-11-11"]);
+    expect(sent("ga4_landing_pages")).toEqual(datesFrom("2026-11-07", 5));
+  });
+
+  it("imports again the failed and provisional days of the current GA4 property only", async () => {
+    await insertDay({ dataset: "ga4_pages", property: GA4, date: addDays(TODAY, -20), status: "failed" });
+    await insertDay({ dataset: "ga4_pages", property: "999", date: addDays(TODAY, -21), status: "failed" });
+    await runDailySync({ db: env.DB, queue, now: NOW, serviceAccountKey: key, mode: "full" });
+    expect(sent("ga4_pages")).toContain(addDays(TODAY, -20));
+    expect(sent("ga4_pages")).not.toContain(addDays(TODAY, -21));
   });
 });

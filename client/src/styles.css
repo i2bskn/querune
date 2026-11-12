@@ -2069,6 +2069,13 @@ a.tag:hover {
   white-space: nowrap;
 }
 
+/* The host name of a page on another host than the site. */
+.bar-host {
+  margin-left: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--ink-3);
+}
+
 .share-bar {
   display: flex;
   gap: 2px;

@@ -6,6 +6,8 @@ import type {
   InsightsMemo,
   InsightsOverview,
   InsightsResponse,
+  PageViewTotals,
+  PageViewsCoverage,
   SearchRow,
   SearchTotals,
   SessionRow,
@@ -15,7 +17,15 @@ import type { SiteRow } from "./db/schema";
 import type { ArticleRow } from "./db/schema";
 import { SEARCH_CONSOLE_TIME_ZONE } from "./sync/consumer";
 import { addDays, datesBetween, isValidDate, todayUtc } from "./sync/dates";
-import { aggregateStatement, coverageStatement, type MetricValues, type Period } from "./sync/queries";
+import {
+  aggregateStatement,
+  coverageStatement,
+  ga4PageOf,
+  pagePathVariants,
+  type MetricValues,
+  type Period,
+} from "./sync/queries";
+import { dayStateOf } from "./sync/status";
 
 export const INSIGHTS_DAYS_DEFAULT = 28;
 export const INSIGHTS_DAYS_MAX = 180;
@@ -27,6 +37,10 @@ const SEARCH_METRICS = [
   { name: "clicks", expr: "clicks" },
   { name: "impressions", expr: "impressions" },
   { name: "weighted_position", expr: "position * impressions" },
+];
+const PAGE_VIEW_METRICS = [
+  { name: "views", expr: "views" },
+  { name: "engagement_seconds", expr: "engagement_seconds" },
 ];
 const SESSION_METRICS = [
   { name: "sessions", expr: "sessions" },
@@ -62,6 +76,22 @@ function sessionTotals(values: MetricValues): SessionTotals {
   };
 }
 
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+// The totals of the page views; every value is null when no day was imported.
+function pageViewTotals(values: MetricValues | null): PageViewTotals {
+  if (values === null) return { views: null, engagement_seconds: null, avg_engagement_seconds_per_view: null };
+  const views = values.views ?? 0;
+  const seconds = values.engagement_seconds ?? 0;
+  return {
+    views,
+    engagement_seconds: round1(seconds),
+    avg_engagement_seconds_per_view: ratio(seconds, views, 1),
+  };
+}
+
 // The period of the dashboard: days days ending at end, and the same number of days just before it.
 export function periodsOf(end: string, days: number): { current: Period; previous: Period } {
   const start = addDays(end, -(days - 1));
@@ -77,14 +107,16 @@ function landingPageOf(url: string): string | null {
   }
 }
 
-// The latest day imported for the current properties of a site; null when nothing is imported.
+// The latest day imported for the current properties of a site; null when nothing is imported. ga4_pages is not
+// looked at, so that it does not move the default period of search and sessions.
 async function latestDate(d1: D1Database, site: SiteRow): Promise<string | null> {
   const properties = [site.gscProperty, site.ga4PropertyId].filter((p): p is string => p !== null);
   if (properties.length === 0) return null;
   const row = await d1
     .prepare(
       `SELECT MAX(date) AS date FROM sync_days
-      WHERE site_id = ? AND property IN (SELECT value FROM json_each(?)) AND last_succeeded_at IS NOT NULL`,
+      WHERE site_id = ? AND dataset IN ('gsc_pages', 'gsc_queries', 'ga4_landing_pages')
+        AND property IN (SELECT value FROM json_each(?)) AND last_succeeded_at IS NOT NULL`,
     )
     .bind(site.id, JSON.stringify(properties))
     .first<{ date: string | null }>();
@@ -113,6 +145,8 @@ export async function getInsights(d1: D1Database, site: SiteRow, input: Insights
   const landingPage = articleUrl === null ? null : landingPageOf(articleUrl);
   const readSearch = site.gscProperty !== null && (article === null || articleUrl !== null);
   const readSessions = site.ga4PropertyId !== null && (article === null || landingPage !== null);
+  const ga4Page = articleUrl === null ? null : ga4PageOf(articleUrl);
+  const readPageViews = site.ga4PropertyId !== null && (article === null || ga4Page !== null);
 
   const statements: D1PreparedStatement[] = [];
   const readers: ((rows: Record<string, unknown>[]) => void)[] = [];
@@ -290,6 +324,145 @@ export async function getInsights(d1: D1Database, site: SiteRow, input: Insights
     push(coverage.statement, (rows) => (result.coverage = coverageOf(coverage.read(rows))));
   }
 
+  let pageViews: InsightsResponse["page_views"] = null;
+  if (readPageViews && site.ga4PropertyId !== null) {
+    const property = site.ga4PropertyId;
+    const emptyCoverage: PageViewsCoverage = {
+      days: 0,
+      available_days: 0,
+      provisional_days: 0,
+      missing_days: 0,
+      truncated_days: 0,
+      time_zone: null,
+      thresholded_days: 0,
+    };
+    const result: NonNullable<InsightsResponse["page_views"]> = {
+      property,
+      daily: [],
+      totals: pageViewTotals(null),
+      previous_totals: pageViewTotals(null),
+      pages: [],
+      coverage: emptyCoverage,
+      previous_coverage: emptyCoverage,
+    };
+    pageViews = result;
+    // An article matches the rows of its host name and of its path or the path decoded (GA4 may return either).
+    const pageFilter =
+      ga4Page === null
+        ? []
+        : [
+            {
+              sql: "host_name = ? AND page_path IN (SELECT value FROM json_each(?))",
+              values: [ga4Page.host_name, JSON.stringify(pagePathVariants(ga4Page.page_path))],
+            },
+          ];
+    // The import state of every day, of the current property only.
+    let dayRows = new Map<string, Record<string, unknown>>();
+    push(
+      d1
+        .prepare(
+          `SELECT date, status, last_succeeded_at, last_data_state FROM sync_days
+          WHERE site_id = ? AND dataset = 'ga4_pages' AND property = ? AND date >= ? AND date <= ?`,
+        )
+        .bind(site.id, property, previous.start, current.end),
+      (rows) => {
+        dayRows = new Map(rows.map((row) => [String(row.date), row]));
+      },
+    );
+    push(
+      d1
+        .prepare(
+          `SELECT date, SUM(views) AS views, SUM(engagement_seconds) AS seconds
+          FROM ga4_page_daily WHERE site_id = ? AND property = ? AND date >= ? AND date <= ?${pageFilter
+            .map((f) => ` AND ${f.sql}`)
+            .join("")}
+          GROUP BY date ORDER BY date`,
+        )
+        .bind(site.id, property, previous.start, current.end, ...pageFilter.flatMap((f) => f.values)),
+      (rows) => {
+        const byDate = new Map(rows.map((row) => [String(row.date), row]));
+        // Only the imported days are summed; a period without any stays null.
+        const sums: { current: MetricValues | null; previous: MetricValues | null } = { current: null, previous: null };
+        for (const date of datesBetween(previous.start, current.end)) {
+          const raw = dayRows.get(date);
+          const state = dayStateOf(
+            raw === undefined
+              ? undefined
+              : {
+                  status: String(raw.status),
+                  last_succeeded_at: raw.last_succeeded_at === null ? null : Number(raw.last_succeeded_at),
+                  last_data_state: raw.last_data_state === null ? null : String(raw.last_data_state),
+                },
+          );
+          const imported = state === "final" || state === "provisional";
+          const row = byDate.get(date);
+          const views = Number(row?.views ?? 0);
+          const seconds = Number(row?.seconds ?? 0);
+          if (imported) {
+            const key = date >= current.start ? "current" : "previous";
+            const target: MetricValues = sums[key] ?? { views: 0, engagement_seconds: 0 };
+            target.views = (target.views ?? 0) + views;
+            target.engagement_seconds = (target.engagement_seconds ?? 0) + seconds;
+            sums[key] = target;
+          }
+          result.daily.push({
+            date,
+            views: imported ? views : null,
+            engagement_seconds: imported ? round1(seconds) : null,
+            state,
+          });
+        }
+        result.totals = pageViewTotals(sums.current);
+        result.previous_totals = pageViewTotals(sums.previous);
+      },
+    );
+    const coverageFor = (period: Period, assign: (coverage: PageViewsCoverage) => void) => {
+      const coverage = coverageStatement(d1, {
+        siteId: site.id,
+        dataset: "ga4_pages",
+        property,
+        period,
+        fixedTimeZone: null,
+        withThresholded: true,
+      });
+      push(coverage.statement, (rows) => {
+        const raw = coverage.read(rows);
+        assign({ ...coverageOf(raw), thresholded_days: raw.thresholded_days ?? 0 });
+      });
+    };
+    coverageFor(current, (coverage) => (result.coverage = coverage));
+    coverageFor(previous, (coverage) => (result.previous_coverage = coverage));
+    if (ga4Page === null) {
+      const q = aggregateStatement(d1, {
+        table: "ga4_page_daily",
+        siteId: site.id,
+        property,
+        keys: ["host_name", "page_path"],
+        metrics: PAGE_VIEW_METRICS,
+        filters: [],
+        current,
+        previous,
+        orderBy: "views",
+        limit: TOP_LIMIT,
+      });
+      // Read after the coverage of the previous period: previous_views is null when none of its days is imported.
+      push(q.statement, (rows) => {
+        const previousImported = result.previous_coverage.available_days > 0;
+        result.pages = q.read(rows).rows.map((row) => {
+          const values = pageViewTotals(row.values);
+          return {
+            host_name: row.keys.host_name ?? "",
+            page_path: row.keys.page_path ?? "",
+            views: values.views ?? 0,
+            engagement_seconds: values.engagement_seconds ?? 0,
+            avg_engagement_seconds_per_view: values.avg_engagement_seconds_per_view,
+            previous_views: previousImported ? (row.previous?.views ?? 0) : null,
+          };
+        });
+      });
+    }
+  }
+
   // The memos around the period, for the marks on the charts. The browser places them by its own date, so a day of
   // margin is read on each side.
   const memos: InsightsMemo[] = [];
@@ -327,6 +500,7 @@ export async function getInsights(d1: D1Database, site: SiteRow, input: Insights
     article: article === null ? null : { id: article.id, title: article.title, url: article.url },
     search,
     sessions,
+    page_views: pageViews,
     memos,
   };
 }

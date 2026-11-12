@@ -110,7 +110,7 @@
 
 ### `POST /api/v1/sites/:id/sync`
 
-`start_date`と`end_date`（`YYYY-MM-DD`、両端を含む）の各日を、サイトにプロパティがあるデータセット（Search Consoleなら`gsc_pages`と`gsc_queries`、GA4なら`ga4_landing_pages`）ごとに取り込みます。取得済みの日も取り込み直します。Search ConsoleのデータセットはUTCの今日から16か月より前の日を含めません（Search Consoleの保存期間外のため）。応答の`queued`は依頼したメッセージ数（日×データセット）、`days`は依頼した日の数です。待ち・実行中の日は依頼し直しません。手動の取り込みでは、Googleが0行を返した日も0行として保存します（毎日の取り込みでは前回のデータを残します。[取り込みの仕組み](#取り込みの仕組み)）。
+`start_date`と`end_date`（`YYYY-MM-DD`、両端を含む）の各日を、サイトにプロパティがあるデータセット（Search Consoleなら`gsc_pages`と`gsc_queries`、GA4なら`ga4_landing_pages`と`ga4_pages`）ごとに取り込みます。取得済みの日も取り込み直します。Search ConsoleのデータセットはUTCの今日から16か月より前の日を含めません（Search Consoleの保存期間外のため）。応答の`queued`は依頼したメッセージ数（日×データセット）、`days`は依頼した日の数です。待ち・実行中の日は依頼し直しません。手動の取り込みでは、Googleが0行を返した日も0行として保存します（毎日の取り込みでは前回のデータを残します。[取り込みの仕組み](#取り込みの仕組み)）。
 
 検証は次の順に行い、最初に見つかったエラーを返します。
 
@@ -161,7 +161,7 @@
 }
 ```
 
-- `datasets`は常に`gsc_pages`、`gsc_queries`、`ga4_landing_pages`の3件です。`configured`は対応するプロパティがあるか、`property`は今のプロパティです。プロパティがなければ、ほかの値は`null`・0・空の配列です。
+- `datasets`は常に`gsc_pages`・`gsc_queries`・`ga4_landing_pages`・`ga4_pages`の4件です。`configured`は対応するプロパティがあるか、`property`は今のプロパティです。プロパティがなければ、ほかの値は`null`・0・空の配列です。
 - 数えるのは今のプロパティの日だけです。「取得済みの日」は一度でも取り込みに成功した日で、取り直しの待ち・実行中・失敗の間も取得済みのままです。
 - `latest_date`は取得済みの最新の日、`provisional_from`は取得済みで速報値の最も古い日、`last_succeeded_at`は最後に成功した時刻（UNIX時間のミリ秒）、`available_days`は取得済みの日数、`truncated_days`は行数の上限で打ち切った日数です。
 - `queued`・`running`・`failed`は、その状態の日数です。`recent_failures`は失敗した日を新しい順に最大10件返します。
@@ -170,7 +170,7 @@
 - `state_basis`は確定・速報値の判定根拠です。`api`（Search Console）はAPIが未確定とした日を速報値にします。行のない日だけは経過日数で推定します。`elapsed_days`（GA4）は経過日数による推定で、APIの保証ではありません。`refresh_days`は毎日取り直す直近の日数です。
 - `recent_days`は`expected_latest_date`から遡る14日の状態を古い順に返します。`state`は`final`（確定）・`provisional`（速報値）・`pending`（成功したことがなく待ち・実行中）・`failed`（成功したことがなく失敗）・`missing`（未取得）のいずれかです。`final`と`provisional`は最後に成功した取り込みの判定です。`updating`は取得済みの日を取り直している間`true`です。`row_count`と`fetched_at`は最後に成功した取り込みの行数と時刻、`error_code`は最後の取り込みが失敗した日のコードです（取得済みの日の取り直しの失敗も含む）。
 - `final_through`は`recent_days`で確定が途切れずに続く最後の日です。すべて確定なら`expected_latest_date`で、最も古い日が確定でなければ`null`です。直近14日だけで決めるため、それより前の日が確定していることは保証しません。
-- サイト全体の`final_through`は、設定済みのデータセットの値の最小です。どれかが`null`なら`null`です。各値はそれぞれのデータセットの日付（Search Consoleは太平洋時間、GA4はプロパティのタイムゾーン）で、最小は日付の文字列として比べます。
+- サイト全体の`final_through`は、設定済みのデータセット（`ga4_pages`を含む）の値の最小です。どれかが`null`なら`null`です。`ga4_pages`を追加した直後は直近の日が未取得のため、[過去の日の取り込み](#過去の日の取り込み)を行うまでサイト全体の`final_through`が`null`になることがあります。各値はそれぞれのデータセットの日付（Search Consoleは太平洋時間、GA4はプロパティのタイムゾーン）で、最小は日付の文字列として比べます。
 
 失敗の`error_code`は次のとおりです。
 
@@ -194,7 +194,7 @@
 | --- | --- |
 | `days` | 期間の日数（1〜180、既定28） |
 | `end` | 期間の最後の日（`YYYY-MM-DD`、今日以前）。省略すると取り込み済みの最新の日 |
-| `article_id` | 指定するとその記事のURLのページ（GA4はURLのパス）だけを集計し、メモはその記事にひも付くものだけを返す |
+| `article_id` | 指定するとその記事のURLのページだけを集計し、メモはその記事にひも付くものだけを返す（GA4のセッションはURLのパス・ページの表示回数はURLのホスト名とパスで照合する） |
 
 ```json
 {
@@ -221,6 +221,15 @@
     "landing_pages": [],
     "coverage": { "days": 28, "available_days": 28, "provisional_days": 3, "missing_days": 0, "truncated_days": 0, "time_zone": "Asia/Tokyo" }
   },
+  "page_views": {
+    "property": "123456789",
+    "daily": [{ "date": "2026-09-12", "views": 412, "engagement_seconds": 10320.5, "state": "final" }],
+    "totals": { "views": 12840, "engagement_seconds": 321004.2, "avg_engagement_seconds_per_view": 25 },
+    "previous_totals": { "views": 10211, "engagement_seconds": 250180.9, "avg_engagement_seconds_per_view": 24.5 },
+    "pages": [{ "host_name": "example.com", "page_path": "/a", "views": 2210, "engagement_seconds": 70720.4, "avg_engagement_seconds_per_view": 32, "previous_views": 1980 }],
+    "coverage": { "days": 28, "available_days": 28, "provisional_days": 3, "missing_days": 0, "truncated_days": 0, "time_zone": "Asia/Tokyo", "thresholded_days": 0 },
+    "previous_coverage": { "days": 28, "available_days": 28, "provisional_days": 0, "missing_days": 0, "truncated_days": 0, "time_zone": "Asia/Tokyo", "thresholded_days": 0 }
+  },
   "memos": [{ "id": "memo_01JC9Z8Q4R6T2V7W3X5Y1A0B2C", "title": "タイトルを変更", "tags": ["改善"], "created_at": 1793000000000 }]
 }
 ```
@@ -229,6 +238,14 @@
 - `ctr`はクリック÷表示回数、`position`は表示回数で重み付けした平均掲載順位、`engagement_rate`はエンゲージのあったセッション÷セッションです。分母が0なら`null`です。
 - `pages`・`queries`はクリックの多い順、`channels`・`landing_pages`はセッションの多い順に10件までです。`previous_*`は前の期間に行がなければ`null`です。
 - `search`はSearch Consoleのプロパティがないか記事にURLがなければ`null`、`sessions`はGA4のプロパティがないか記事にURLがなければ`null`です。
+- `page_views`はGA4のページの表示回数です（[ページの表示回数](#ページの表示回数ga4_pages)）。GA4のプロパティがないか記事にURLがなければ`null`です。
+  - `daily`の`state`はその日の取り込みの状態（`final`・`provisional`・`pending`・`failed`・`missing`。`GET /api/v1/sites/:id/sync`の`recent_days`と同じ判定）です。取得済み（`final`・`provisional`）の日は合計で、行がなければ0です。取得済みでない日は`null`です。
+  - `totals`・`previous_totals`は取得済みの日の合計です。期間に取得済みの日が1日もなければ各値が`null`です。一部の日だけ取得済みなら、その日の合計を返します。欠けた日数は`coverage`の`missing_days`で示します。
+  - `pages`はサイト全体のときだけ表示回数の多い順に10件までで、記事のときは空です。`previous_views`は前の期間に取得済みの日が1日もなければ`null`、あれば数値（行がなければ0）です。
+  - `coverage`・`previous_coverage`はそれぞれの期間の取り込みの状況で、`thresholded_days`はGA4のしきい値か(other)行の影響を受けた取得済みの日数です。
+  - `engagement_seconds`と`avg_engagement_seconds_per_view`は小数第1位まで、`views`は整数です。
+  - 画面は、両方の期間で`missing_days`が0のときだけ前の期間との比較を出します。
+- 既定の期間の最後の日（`end`の省略時）は、`gsc_pages`・`gsc_queries`・`ga4_landing_pages`の取得済みの最新の日です。`ga4_pages`は含めません。
 - `memos`は期間の前後1日を含めて作成されたメモを新しい順に100件までです。画面はブラウザの日付で各日に並べます。
 - クエリが正しくなければ400 `invalid_query`、サイトか記事（別のサイトの記事を含む）がなければ404 `not_found`です。
 
@@ -256,11 +273,12 @@
 - 取り込みは、1メッセージで1データセット×1日×2,000行までを処理します。2,000行を超える日は、続きのメッセージで次の2,000行を取り込みます。同じ日の取り込みは同じIDを持ち、取り込み直しが始まると古い取り込みのメッセージは捨てられます。
 - 1日・1データセットあたり50,000行までを取り込みます（Search Console APIで取れる上限）。それを超える日は打ち切り、打ち切った日として記録します。
 - 取り込みの日付はデータセットのタイムゾーンで決めます。Search Consoleは太平洋時間、GA4はプロパティのタイムゾーンです（最初の取り込みまでは`Etc/GMT+12`）。各データセットで、そのタイムゾーンの昨日までを取り込みます。
-- 毎日18:00 UTCに、全サイトの直近の日を確定・速報値にかかわらず取り込み直します。直近の日はSearch Consoleが7日、GA4が10日です（GA4は最大7日遅れて届くデータと最大48時間の処理があるため）。あわせて直近30日のうち速報値・失敗・止まった取り込みの日を取り込み直し、削除のメッセージを送り直します。
+- 毎日18:00 UTCに、全サイトの直近の日を確定・速報値にかかわらず取り込み直します。直近の日はSearch Consoleが7日、GA4（`ga4_landing_pages`・`ga4_pages`とも）が10日です（GA4は最大7日遅れて届くデータと最大48時間の処理があるため）。あわせて直近30日のうち速報値・失敗・止まった取り込みの日を取り込み直し、削除のメッセージを送り直します。
 - 毎日6:00 UTCに、直近5日のうち確定していない日（未取得・速報値・失敗）を取り込みます。時刻を12時間おきにすることで、どのタイムゾーンの昨日も1日に2回取り込みます。日本時間では15:00と3:00です。
 - それより前の日を取り直すには、管理画面かAPIで期間を指定して取り込みます。待ち・実行中の日は取り直しの対象にしないため、同じ日の取り込みが並行することはありません。
 - Search Consoleは日付でもグループ化して取り込み、応答のメタデータ（`first_incomplete_date`）で未完成とされた日を速報値として記録します。行があり未完成とされなかった日は、新しい日でも確定です。行のない日はAPIで判定できないため、太平洋時間で3日前以降を速報値と推定します。2ページ目以降の応答にメタデータが返るかはAPIの仕様に明記がないため、前のページで未完成とされた日はその判定を引き継ぎます。
-- GA4は確定を返さないため、プロパティのタイムゾーンで4日前以降の日を速報値と推定します。応答にタイムゾーンがなければUTCで判定し、タイムゾーンは記録しません。
+- GA4は確定を返さないため、プロパティのタイムゾーンで4日前以降の日を速報値と推定します。応答にタイムゾーンがなければUTCで判定し、タイムゾーンは記録しません。GA4のタイムゾーンは、2つのGA4データセットのうち最後に成功した取り込みの記録を使います。
+- GA4の応答のメタデータで`subjectToThresholding`か`dataLossFromOtherRow`が`true`のページがあった日は、しきい値か(other)行の影響を受けた日として記録します（2ページ目以降にも引き継ぎます）。
 - 取り直しは行を上書きし、取り直しで返らなかった行を削除します。値の更新や行の消滅が反映され、行は重複しません。
 - 前回は行があった日にGoogleが0行を返した場合、毎日の取り込みでは前回のデータを残して`empty_response`として失敗にします。失敗の日は翌日以降の取り込みが取り直します。0行が正しい場合は、管理画面かAPIでその日を手動で取り込むと0行として保存します。
 - 速報値の日はページを取る間に値が変わるため、ページの境界で行が抜けたり重複したりすることがあります（Search Consoleは並び順を指定できないため）。重複は同じ行への上書きで吸収し、抜けは翌日以降の取り直しで補います。
@@ -456,8 +474,9 @@ Cloudflare Workersの無料プランでは、大きなサイトマップを読�
 | `get_sync_status` | `site_id` | `GET /api/v1/sites/:id/sync`と同じ`SyncStatus` |
 | `query_search_performance` | `site_id`、`start_date`、`end_date`（必須）、`group_by`（`page`・`query`・`page_query`・`date`、既定`page`）、`page`（完全一致）、`query_contains`（部分一致。`group_by`が`query`・`page_query`のときだけ）、`compare_start_date`・`compare_end_date`、`order_by`（`clicks`・`impressions`、既定`clicks`）、`limit`（1〜100、既定20） | Search Consoleの集計。`rows`、`totals`、`coverage`、`notes` |
 | `query_landing_sessions` | `site_id`、`start_date`、`end_date`（必須）、`group_by`（`landing_page`・`channel_group`・`landing_page_channel_group`・`date`、既定`landing_page`）、`channel_group`（完全一致。例 `Organic Search`）、`landing_page`（完全一致）、`compare_start_date`・`compare_end_date`、`order_by`（`sessions`・`engaged_sessions`・`key_events`、既定`sessions`）、`limit`（1〜100、既定20） | GA4の集計。`rows`、`totals`、`coverage`、`notes` |
+| `query_page_views` | `site_id`、`start_date`、`end_date`（必須）、`group_by`（`page`・`host_name`・`date`、既定`page`。`page`はホスト名とパスの組）、`host_name`（完全一致）、`page_path`（そのままの値とデコード版の両方に一致）、`compare_start_date`・`compare_end_date`、`order_by`（`views`・`engagement_seconds`、既定`views`）、`limit`（1〜100、既定20） | GA4のページの表示回数の集計。`rows`、`totals`、`coverage`、`notes` |
 | `list_articles` | `site_id`、`tag`（完全一致）、`published`（`true`は公開日のある記事、`false`はない記事）、`title_contains`（タイトルの部分一致。1〜100文字。ASCIIの大文字小文字を区別しない）、`limit`（1〜200、既定50）、`offset`（既定0） | `{ "site_id", "articles", "next_offset" }`。各記事は`ArticleSummary`に備考の先頭200文字`note_preview`を付けたもの |
-| `get_article` | `article_id` | `Article`に、ひも付くメモ`memos`（`MemoSummary`、新しく作成した順に50件まで）、その件数`memos_total`、`search_console_page`（記事のURL）、`ga4_landing_page`（URLのパス）を付けたもの。URLがなければ後の2つは`null` |
+| `get_article` | `article_id` | `Article`に、ひも付くメモ`memos`（`MemoSummary`、新しく作成した順に50件まで）、その件数`memos_total`、`search_console_page`（記事のURL）、`ga4_landing_page`（URLのパス）、`ga4_page`（`{ "host_name", "page_path" }`。URLのホスト名とpathnameのまま）を付けたもの。URLがなければ後の3つは`null` |
 | `list_memos` | `site_id`、`tag`、`article_id`、`created_after`、`created_before`（オフセット付きのRFC 3339の日時）、`limit`（1〜100、既定20）、`offset`（既定0） | `{ "site_id", "memos", "next_offset" }`。各メモは`MemoSummary`に本文の先頭300文字`content_preview`を付けたもの |
 | `get_memo` | `memo_id` | `Memo` |
 | `list_tags` | `site_id` | `GET /api/v1/sites/:id/tags`と同じ |
@@ -469,14 +488,15 @@ Cloudflare Workersの無料プランでは、大きなサイトマップを読�
 - `create_article`・`update_article`・`create_memo`・`update_memo`のほかは読み取り専用で、MCPのツール注釈`readOnlyHint: true`で示します。未知の引数はエラーになります。Google APIは呼ばず、取り込み済みのデータだけを読みます。
 - 記事とメモのツールは[記事とメモ](#記事とメモ)のREST APIと同じ検証を行い、同じメッセージを返します。一覧の絞り込みの規則も同じです。削除のツールはありません。
 - 変更のツールは指定した項目だけを変え、`tags`・`note`・`content`は値全体を、`article_ids`は関連付けの全体を置き換えます。変更の履歴は残らないため、変更前の値`previous`を返します。誤って上書きしたときは、会話に残った`previous`から戻せます。
-- `get_article`の`search_console_page`と`ga4_landing_page`は、`query_search_performance`の`page`と`query_landing_sessions`の`landing_page`に使うための値です。リダイレクト、末尾のスラッシュ、クエリ文字列のために、Search ConsoleのURLやGA4のパスが記事のURLと異なることがあります。
+- `get_article`の`search_console_page`と`ga4_landing_page`は、`query_search_performance`の`page`と`query_landing_sessions`の`landing_page`に使うための値です。`ga4_page`は`query_page_views`の`host_name`と`page_path`に使います。`page_path`はデコード版のパスにも一致します。リダイレクト、末尾のスラッシュ、クエリ文字列のために、Search ConsoleのURLやGA4のパスが記事のURLと異なることがあります。
 - 期間は開始日と終了日を含みます。期間は400日まで、`query_search_performance`の`group_by`が`query`・`page_query`のときは100日までです。比較する期間にも同じ上限があります。
 - 読むのは今のプロパティの行だけです。プロパティが未設定のサイトには`not_configured`を返します。
 - 各行は、キー（`page`、`query`、`landing_page`、`channel_group`、`date`）と指標の合計です。`query_search_performance`の`ctr`は合計クリック数 ÷ 合計表示回数（小数第4位まで）、`position`は表示回数で重み付けした平均掲載順位（小数第1位まで）で、表示回数が0なら`null`です。並びは`order_by`の降順、同じ値はキーの昇順です。`group_by`が`date`のときは日付の昇順で、`limit`に関係なく期間内のデータがある日をすべて返します。
 - `totals`は、同じ条件での期間全体の合計です。`limit`で返さなかった行も含みます。
 - 比較する期間を指定すると、各行と`totals`に`previous`（比較期間の値）を付けます。比較期間にそのキーの行がなければ`previous`の各値は`null`です。`group_by`が`date`のときは比較できません。
+- `query_page_views`の`views`・`engagement_seconds`・`avg_engagement_seconds_per_view`は[ページの表示回数](#ページの表示回数ga4_pages)の定義です。期間に取得済みの日が1日もなければ`totals`の各値は`null`です。比較期間に取得済みの日が1日もなければ、各行の`previous`と`totals.previous`は`null`です。取得済みの日はあるのにその行がなければ、`previous`は`{ "views": 0, "engagement_seconds": 0, "avg_engagement_seconds_per_view": null }`です（表示が0回だったため）。`coverage`の両方の期間に`thresholded_days`を付けます。ほかのツールの`coverage`には付けません。
 - `coverage`は`{ "current", "previous" }`で、それぞれの期間の`days`（日数）、`available_days`（取得済み）、`provisional_days`（速報値）、`truncated_days`（打ち切り）、`refreshing_days`（取得済みで取り直しを待っているか実行中）、`missing_dates`（取得済みでない日。昇順に最大31件、超えたら`missing_dates_truncated`が`true`）、`provisional_dates`（取得済みで速報値の日。昇順に最大31件、超えたら`provisional_dates_truncated`が`true`）、`time_zone`を返します。未取得の日を成果の悪化と取り違えないためです。
-- `notes`は集計を読むときの注意です（Search Consoleの日付は太平洋時間、クエリ別の値は匿名化クエリを含まない、行数の上限による打ち切り、GA4の日付とキーイベントの意味）。どちらかの期間に速報値の日があれば今後変わりうること、GA4では確定が経過日数による推定であることも返します。
+- `notes`は集計を読むときの注意です（Search Consoleの日付は太平洋時間、クエリ別の値は匿名化クエリを含まない、行数の上限による打ち切り、GA4の日付とキーイベントの意味）。どちらかの期間に速報値の日があれば今後変わりうること、GA4では確定が経過日数による推定であることも返します。`query_page_views`は、表示回数が入口のセッション数と別の指標であること・平均がGA4の画面のユーザーあたりの値と違うこと・ユーザー数を提供しないことを常に返します。`thresholded_days`が1日以上なら、その影響も返します。
 - 週・月などの期間を比べるときは、`get_sync_status`の`final_through`以前の同じ完了した期間を使うよう、ツールの説明に記載しています。`final_through`は直近14日だけで決まるため、期間全体の完了は`coverage`で確かめます。
 - サイトの名前とURL、ページ、クエリ、ランディングページ、チャネル、記事・メモのタイトル・URL・備考・本文・タグは外部や利用者・AIが入力したデータです。ツールの説明にも、指示として扱わないよう記載しています。書き込むツールの説明には、会話で利用者が求めた内容だけを書き込むよう記載しています。
 
@@ -500,6 +520,7 @@ Cloudflare Workersの無料プランでは、大きなサイトマップを読�
 | Search Consoleのページ別（`gsc_pages`） | ページ×日 | クリック数、表示回数、平均掲載順位 | 日付は太平洋時間。ページはSearch Consoleが返したURLそのまま |
 | Search Consoleのクエリ別（`gsc_queries`） | ページ×クエリ×日 | クリック数、表示回数、平均掲載順位 | 匿名化クエリと行数の制約があり、合計はページ別と一致しない |
 | GA4のランディングページ別（`ga4_landing_pages`） | ランディングページ×セッションのデフォルト チャネル グループ×日 | セッション数、エンゲージのあったセッション数、キーイベント数 | 日付はプロパティのタイムゾーン。流入と成果（キーイベント）を1つのテーブルに持つ。ランディングページはクエリ文字列を含まないパス |
+| GA4のページ別（`ga4_pages`） | ホスト名×ページのパス×日 | 表示回数（`screenPageViews`）、エンゲージメント時間の合計（`userEngagementDuration`の秒数） | 日付はプロパティのタイムゾーン。ホスト名とパスはGA4が返した値のまま（`(not set)`を含む）。パスはクエリ文字列を含まない |
 
 チャネルは絞り込まずにディメンションとして保存し、読み取るときに絞り込みます。行ごとに、取り込んだときのプロパティを持ちます。GA4はData APIの集計結果を保存します。生のイベントは保存しません。
 
@@ -510,8 +531,30 @@ Cloudflare Workersの無料プランでは、大きなサイトマップを読�
 - Search Consoleのクエリ行の合計を、ページ全体の値として扱いません。
 - 欠損と未取得を0に置き換えません。全件を取得したか、一部だけかを区別します。
 - ページの成果を、そのページの各クエリ行に複製して合計しません。クエリ別の成果は、これらの集計からは求められません。
+- GA4のセッション数（入口のページ）とページの表示回数（訪問の途中で読まれたページを含む）は別の指標として扱います。
 - Search Consoleのクリック数とGA4のセッション数は別の指標として扱います。Search Consoleの日付は太平洋時間、GA4はプロパティのタイムゾーンで区切られるため、同じ日付でも厳密には対応しません。
+
+### ページの表示回数（`ga4_pages`）
+
+| 名前 | 定義 | 期間で足せるか |
+| --- | --- | --- |
+| `views`（表示回数） | GA4の`screenPageViews`。ページが表示された回数で、同じ人の再表示も数える。入口のページに限らない | 足せる |
+| `engagement_seconds`（エンゲージメント時間の合計） | GA4の`userEngagementDuration`（秒）の合計 | 足せる |
+| `avg_engagement_seconds_per_view`（表示1回あたりの平均エンゲージメント時間） | 合計の`engagement_seconds` ÷ 合計の`views`。期間と行の合計どうしで割り、日ごとの平均を平均しない。`views`が0なら`null` | 合計から求める |
+
+- GA4の画面の「平均エンゲージメント時間」はアクティブユーザー1人あたりの値です。期間の重複しないユーザー数は日ごとのデータから求められないため、Queruneはこの値を提供しません。代わりに表示1回あたりの値を別の名前で返します。
+- ページ別のユーザー数（`activeUsers`）は取り込みません。ユーザーの指標を含むレポートはGA4のしきい値の対象になりやすく、しきい値で行が除かれると同じ行の表示回数も消えるためです。また日ごと・ページごとのユーザー数は足せないため、期間の振り返りに使える形で返せません。日ごとのユーザー数を足した値も、どの名前でも返しません。
+- 期間全体の重複しないユーザー数やGA4と同じ定義の平均エンゲージメント時間が必要な場合は、期間ごとにGA4へ問い合わせる別の仕組みが要ります（今は提供しません）。
+- 記事との照合は、記事のURLのホスト名（`hostname`）とパス（`pathname`）で行います。パスはそのままの値と、デコードした値の両方に一致させます。GA4がパスをパーセントエンコードのまま返すかデコードして返すかが公式文書に記載されていないためです。同じ日に両方の行があれば足します。`%2F`・`%3F`・`%23`はパスの区切りになるためデコードしません（`/a%2Fb`は`/a/b`に一致しません）。
+- 末尾のスラッシュは正規化しません。`/a`と`/a/`は別のページとして扱います。クエリ文字列は`pagePath`に含まれないため、`?utm_...`付きの表示も同じページに数えます。
+- 同じプロパティに複数のホスト名（`www`の有無・別のサブドメイン）がある場合、記事の照合は記事のURLのホスト名だけです。サイト全体の合計はプロパティのすべてのホスト名を含みます。一覧には常にホスト名を返します。
+- しきい値か(other)行への集約の影響を受けた日は`thresholded_days`で数えます。その日は一部のページの行が含まれていない可能性があります。
+- 取り込みの成功は取り込みの状況で判断します。行がないことを0とは限らず、取得済みの日だけを0として扱います。
+
+### 過去の日の取り込み
+
+`ga4_pages`はデプロイ後の最初の18:00 UTCの毎日の取り込みで直近10日が入ります。それより前の日は、取り込み状況の画面の「期間を選んで取り込む」で90日ずつ取り込みます。期間の取り込みは全データセットを取り直します。データセットは選べません。
 
 ### 来歴
 
-日・データセットごとに、取り込んだプロパティ、最後に成功した時刻、確定・速報値、行数、行数の上限で打ち切ったか、タイムゾーンを記録します（[取り込みの仕組み](#取り込みの仕組み)）。遅れて更新される直近の日は取り直し、同じ日を取り直しても重複しないように保存します。
+日・データセットごとに、取り込んだプロパティ、最後に成功した時刻、確定・速報値、行数、行数の上限で打ち切ったか、タイムゾーンを記録します。GA4では、しきい値か(other)行の影響を受けたかも記録します（[取り込みの仕組み](#取り込みの仕組み)）。遅れて更新される直近の日は取り直し、同じ日を取り直しても重複しないように保存します。

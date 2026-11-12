@@ -50,7 +50,7 @@ export type GoogleStatus = {
   error: "invalid" | null;
 };
 
-export type SyncDataset = "gsc_pages" | "gsc_queries" | "ga4_landing_pages";
+export type SyncDataset = "gsc_pages" | "gsc_queries" | "ga4_landing_pages" | "ga4_pages";
 
 // POST /api/v1/sites/:id/sync. Both dates are included, up to 90 days.
 export type SyncRequest = {
@@ -131,7 +131,7 @@ export type DatasetSyncStatus = {
   final_through: string | null;
 };
 
-// GET /api/v1/sites/:id/sync. datasets is always gsc_pages, gsc_queries, ga4_landing_pages.
+// GET /api/v1/sites/:id/sync. datasets is always gsc_pages, gsc_queries, ga4_landing_pages, ga4_pages.
 export type SyncStatus = {
   site_id: string;
   datasets: DatasetSyncStatus[];
@@ -286,6 +286,29 @@ export type InsightsCoverage = {
   time_zone: string | null;
 };
 
+// The views of pages (GA4 screenPageViews: every view of a page, not only the first page of a session) and the
+// engagement time (userEngagementDuration, seconds). avg_engagement_seconds_per_view is the summed engagement time
+// divided by the summed views (null without views). The values are null when no day of the period is imported.
+export type PageViewTotals = {
+  views: number | null;
+  engagement_seconds: number | null;
+  avg_engagement_seconds_per_view: number | null;
+};
+
+// A top page of the period. previous_views is null when no day of the previous period is imported, 0 when the page
+// had no views on the imported days.
+export type PageViewRow = {
+  host_name: string;
+  page_path: string;
+  views: number;
+  engagement_seconds: number;
+  avg_engagement_seconds_per_view: number | null;
+  previous_views: number | null;
+};
+
+// thresholded_days: the imported days whose import was subject to GA4 thresholding or had an "(other)" row.
+export type PageViewsCoverage = InsightsCoverage & { thresholded_days: number };
+
 export type InsightsMemo = { id: string; title: string; tags: string[]; created_at: number };
 
 export type InsightsResponse = {
@@ -316,6 +339,25 @@ export type InsightsResponse = {
     // Empty for an article.
     landing_pages: SessionRow[];
     coverage: InsightsCoverage;
+  } | null;
+  // null when the site has no GA4 property, or the article has no URL. For an article, only the rows of its host name
+  // and its path (or the path decoded) are read.
+  page_views: {
+    property: string;
+    // The values are null on the days not imported (state is not final or provisional), 0 on an imported day without
+    // rows. state is the import state of the day for the current property.
+    daily: {
+      date: string;
+      views: number | null;
+      engagement_seconds: number | null;
+      state: RecentDayState;
+    }[];
+    totals: PageViewTotals;
+    previous_totals: PageViewTotals;
+    // The most viewed pages of the site; empty for an article.
+    pages: PageViewRow[];
+    coverage: PageViewsCoverage;
+    previous_coverage: PageViewsCoverage;
   } | null;
   // The memos created around the periods (of the article when article_id is given), newest first, up to 100.
   memos: InsightsMemo[];

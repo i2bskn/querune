@@ -17,6 +17,7 @@ import {
   type Coverage,
   type MetricValues,
   type Period,
+  pagePathVariants,
 } from "../sync/queries";
 import { getSyncStatus } from "../sync/status";
 import { registerRecordTools } from "./record-tools";
@@ -42,6 +43,8 @@ const MAX_QUERY_DAYS = 100;
 const truncatedNote = "行数の上限で一部だけを取り込んだ日があります。";
 const provisionalNote = "速報値の日（provisional_dates）は今後変わることがあります。";
 const ga4EstimateNote = "GA4 の確定は API で判定できないため、経過日数による推定です。";
+const thresholdedNote =
+  "GA4 のしきい値か (other) 行への集約の対象になった日（coverage の thresholded_days）は、一部のページの行が含まれていない可能性があります。";
 
 function hasProvisional(coverage: { current: Coverage; previous: Coverage | null }): boolean {
   return coverage.current.provisional_days > 0 || (coverage.previous?.provisional_days ?? 0) > 0;
@@ -84,6 +87,23 @@ const landingSessionsInput = z.strictObject({
   channel_group: z.string().min(1).max(2048).optional().describe("セッションのデフォルト チャネル グループ（完全一致。例 Organic Search）"),
   landing_page: z.string().min(1).max(2048).optional().describe("ランディングページのパス（完全一致）"),
   order_by: z.enum(["sessions", "engaged_sessions", "key_events"]).default("sessions").describe("並べる指標（降順）"),
+  limit: limitArg,
+});
+
+const pageViewsInput = z.strictObject({
+  ...periodArgs,
+  group_by: z
+    .enum(["page", "host_name", "date"])
+    .default("page")
+    .describe("集計の単位。page はホスト名とページのパスの組み合わせ"),
+  host_name: z.string().min(1).max(2048).optional().describe("ホスト名（完全一致。例 www.example.com）"),
+  page_path: z
+    .string()
+    .min(1)
+    .max(2048)
+    .optional()
+    .describe("ページのパス（クエリ文字列を含まない。そのままの値と、%2F・%3F・%23 以外をデコードした値の両方に一致）"),
+  order_by: z.enum(["views", "engagement_seconds"]).default("views").describe("並べる指標（降順）"),
   limit: limitArg,
 });
 
@@ -157,17 +177,42 @@ function sessionMetrics(values: MetricValues) {
 
 const NULL_SESSION_METRICS = { sessions: null, engaged_sessions: null, key_events: null };
 
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+// views, engagement_seconds and avg_engagement_seconds_per_view (the summed engagement time ÷ the summed views).
+function pageViewMetrics(values: MetricValues) {
+  const views = values.views ?? 0;
+  const seconds = values.engagement_seconds ?? 0;
+  return {
+    views: Math.round(views),
+    engagement_seconds: round1(seconds),
+    avg_engagement_seconds_per_view: ratio(seconds, views, 1),
+  };
+}
+
+const NULL_PAGE_VIEW_METRICS = { views: null, engagement_seconds: null, avg_engagement_seconds_per_view: null };
+
 // Runs the aggregation and the coverage of each period in one D1 batch.
 async function aggregate(
   db: Db,
   query: AggregateQuery,
   dataset: Dataset,
   fixedTimeZone: string | null,
+  withThresholded = false,
 ): Promise<{ result: AggregateResult; coverage: { current: Coverage; previous: Coverage | null } }> {
   const d1 = db.$client;
   const main = aggregateStatement(d1, query);
   const coverageOf = (period: Period) =>
-    coverageStatement(d1, { siteId: query.siteId, dataset, property: query.property, period, fixedTimeZone });
+    coverageStatement(d1, {
+      siteId: query.siteId,
+      dataset,
+      property: query.property,
+      period,
+      fixedTimeZone,
+      ...(withThresholded ? { withThresholded: true } : {}),
+    });
   const current = coverageOf(query.current);
   const previous = query.previous === null ? null : coverageOf(query.previous);
   const statements = [main.statement, current.statement];
@@ -219,10 +264,10 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     {
       title: "Get sync status",
       description:
-        "サイトの Search Console・GA4 の取り込み状況を返します。データセット（gsc_pages、gsc_queries、ga4_landing_pages）ごとに、今のプロパティ、取得済みの最新の日、速報値の開始日、取得済みの日数、打ち切りの日数、待ち・実行中・失敗の日数と最近の失敗を返します。" +
+        "サイトの Search Console・GA4 の取り込み状況を返します。データセット（gsc_pages・gsc_queries・ga4_landing_pages・ga4_pages）ごとに、今のプロパティ、取得済みの最新の日、速報値の開始日、取得済みの日数、打ち切りの日数、待ち・実行中・失敗の日数と最近の失敗を返します。" +
         "あわせて日付のタイムゾーン（time_zone・time_zone_known）・期待される最新日（expected_latest_date）・確定の判定根拠（state_basis）・毎日取り直す日数（refresh_days）を返します。" +
         "recent_days は期待される最新日から遡る14日の状態（final・provisional・pending・failed・missing）で、final_through はそのうち確定が途切れずに続く最後の日です。" +
-        "サイト全体の final_through はデータセットごとの値の最小で、各値はそれぞれのタイムゾーンの日付です。" +
+        "サイト全体の final_through は設定済みのデータセット（ga4_pages を含む）ごとの値の最小で、すべてのデータセットで確定している日までです。各値はそれぞれのタイムゾーンの日付です。" +
         "Search Console は API が未確定とした日を速報値にします（行のない日は経過日数で推定）。GA4 の確定は経過日数による推定で API の保証ではありません。" +
         "週・月などの期間を比べるときは、データセットごとの最新日が違っても final_through 以前の同じ完了した期間を使ってください。" +
         "final_through は直近14日だけで決まるため、期間全体の完了は集計ツールの coverage で確かめてください。" +
@@ -339,7 +384,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     {
       title: "Query landing sessions",
       description:
-        "取り込んだ GA4 のセッションを、ランディングページ・チャネル（セッションのデフォルト チャネル グループ）・ランディングページとチャネル・日付ごとに集計して返します。期間は開始日と終了日を含み、GA4 のプロパティのタイムゾーンの日付です。key_events は GA4 でキーイベントに設定したイベントの数です。比較する期間を指定すると、各行と合計に previous を付けます。coverage に期間内の取得済み・速報値・未取得の日を返します。速報値の日は coverage の provisional_dates に返します。期間は 400 日までです。" +
+        "取り込んだ GA4 のセッションを、ランディングページ・チャネル（セッションのデフォルト チャネル グループ）・ランディングページとチャネル・日付ごとに集計して返します。期間は開始日と終了日を含み、GA4 のプロパティのタイムゾーンの日付です。key_events は GA4 でキーイベントに設定したイベントの数です。比較する期間を指定すると、各行と合計に previous を付けます。coverage に期間内の取得済み・速報値・未取得の日を返します。速報値の日は coverage の provisional_dates に返します。期間は 400 日までです。途中で読まれたページの表示回数は query_page_views で集計できます。" +
         UNTRUSTED_DATA_NOTE,
       inputSchema: landingSessionsInput,
       annotations: readOnlyAnnotations,
@@ -411,6 +456,110 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           totals: {
             ...sessionMetrics(result.totals),
             ...(compared ? { previous: sessionMetrics(result.previousTotals ?? {}) } : {}),
+          },
+          coverage,
+          notes,
+        });
+      }),
+  );
+
+  server.registerTool(
+    "query_page_views",
+    {
+      title: "Query page views",
+      description:
+        "取り込んだ GA4 のページの表示回数を、ページ（ホスト名とパス）・ホスト名・日付ごとに集計して返します。" +
+        "views は GA4 の screenPageViews で、訪問の途中で読まれたページも含むすべての表示回数です（同じ人の再表示も数えます）。入口のページのセッション数を数える query_landing_sessions とは別の指標です。" +
+        "engagement_seconds はエンゲージメント時間（userEngagementDuration）の合計（秒）です。avg_engagement_seconds_per_view は合計のエンゲージメント時間 ÷ 合計の表示回数で、表示1回あたりの平均です。GA4 の画面の“ユーザーあたりの平均エンゲージメント時間”とは違います。" +
+        "ユーザー数は返しません。期間の重複しないユーザー数は日ごとのデータから求められないためです。" +
+        "期間は開始日と終了日を含み、GA4 のプロパティのタイムゾーンの日付です。page_path はクエリ文字列を含まないパスで、指定した値とそのデコード版（%2F・%3F・%23 はデコードしません）の両方に一致します。" +
+        "比較する期間を指定すると、各行と合計に previous を付けます。coverage に期間内の取得済み・速報値・未取得の日と、GA4 のしきい値か (other) 行の影響を受けた日数（thresholded_days）を返します。取得済みの日がない期間の合計は null です。期間は 400 日までです。" +
+        UNTRUSTED_DATA_NOTE,
+      inputSchema: pageViewsInput,
+      annotations: readOnlyAnnotations,
+    },
+    (args) =>
+      safely("query_page_views", { userId: deps.user.id, siteId: args.site_id }, async () => {
+        const periods = checkPeriods(args);
+        if (isError(periods)) return periods;
+        if (args.group_by === "date" && periods.previous !== null) {
+          return toolError("invalid_argument", compareDateMessage);
+        }
+        const tooLong = checkLength(periods, MAX_DAYS, "集計の期間は 400 日までです");
+        if (tooLong) return tooLong;
+        const site = await findSite(db, args.site_id);
+        if (!site) return toolError("not_found", siteNotFound);
+        if (site.ga4PropertyId === null) return toolError("not_configured", "GA4 のプロパティが設定されていません");
+
+        const keys = { page: ["host_name", "page_path"], host_name: ["host_name"], date: ["date"] }[args.group_by];
+        const filters: AggregateQuery["filters"] = [];
+        if (args.host_name !== undefined) filters.push({ sql: "host_name = ?", values: [args.host_name] });
+        if (args.page_path !== undefined) {
+          filters.push({
+            sql: "page_path IN (SELECT value FROM json_each(?))",
+            values: [JSON.stringify(pagePathVariants(args.page_path))],
+          });
+        }
+        const { result, coverage } = await aggregate(
+          db,
+          {
+            table: "ga4_page_daily",
+            siteId: site.id,
+            property: site.ga4PropertyId,
+            keys,
+            metrics: [
+              { name: "views", expr: "views" },
+              { name: "engagement_seconds", expr: "engagement_seconds" },
+            ],
+            filters,
+            current: periods.current,
+            previous: periods.previous,
+            orderBy: args.group_by === "date" ? null : args.order_by,
+            limit: args.limit,
+          },
+          "ga4_pages",
+          null,
+          true,
+        );
+        const compared = periods.previous !== null;
+        // A period without any imported day has no values: it is not 0 views.
+        const currentImported = coverage.current.available_days > 0;
+        const previousImported = (coverage.previous?.available_days ?? 0) > 0;
+        const notes = [
+          "GA4 の日付はプロパティのタイムゾーンです。",
+          "views は閲覧されたすべてのページの表示回数で、入口のセッション数（query_landing_sessions）とは別の指標です。",
+          "avg_engagement_seconds_per_view は表示1回あたりの平均エンゲージメント時間で、GA4 の画面の“ユーザーあたりの平均エンゲージメント時間”とは違います。",
+          "期間の重複しないユーザー数は提供しません。",
+          ga4EstimateNote,
+        ];
+        if (hasProvisional(coverage)) notes.push(provisionalNote);
+        if (coverage.current.truncated_days > 0 || (coverage.previous?.truncated_days ?? 0) > 0) notes.push(truncatedNote);
+        if ((coverage.current.thresholded_days ?? 0) > 0 || (coverage.previous?.thresholded_days ?? 0) > 0) {
+          notes.push(thresholdedNote);
+        }
+        // An imported previous period without the row had no views of it: 0, not unknown.
+        const previousOf = (values: MetricValues | null) => {
+          if (!previousImported) return null;
+          return pageViewMetrics(values ?? {});
+        };
+        return ok({
+          site_id: site.id,
+          group_by: args.group_by,
+          order_by: args.order_by,
+          start_date: periods.current.start,
+          end_date: periods.current.end,
+          compare_start_date: periods.previous?.start ?? null,
+          compare_end_date: periods.previous?.end ?? null,
+          rows: result.rows.map((row) => ({
+            ...row.keys,
+            ...pageViewMetrics(row.values),
+            ...(compared ? { previous: previousOf(row.previous) } : {}),
+          })),
+          totals: {
+            ...(currentImported ? pageViewMetrics(result.totals) : NULL_PAGE_VIEW_METRICS),
+            ...(compared
+              ? { previous: previousImported ? pageViewMetrics(result.previousTotals ?? {}) : NULL_PAGE_VIEW_METRICS }
+              : {}),
           },
           coverage,
           notes,

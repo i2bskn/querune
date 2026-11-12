@@ -16,6 +16,8 @@ import { requireUser } from "../core";
 import {
   articles,
   DATASETS,
+  GA4_DATASETS,
+  isGa4Dataset,
   pendingPurges,
   sitemapUrls,
   sites,
@@ -298,7 +300,7 @@ const sitesApi = new Hono<AppEnv>()
       changes.push({ datasets: ["gsc_pages", "gsc_queries"], before: current.gscProperty });
     }
     if (input.ga4PropertyId !== undefined && input.ga4PropertyId !== current.ga4PropertyId) {
-      changes.push({ datasets: ["ga4_landing_pages"], before: current.ga4PropertyId });
+      changes.push({ datasets: [...GA4_DATASETS], before: current.ga4PropertyId });
     }
     const purges: { id: string; siteId: string; dataset: Dataset; property: string; createdAt: number; attemptedAt: number }[] =
       [];
@@ -407,8 +409,8 @@ const sitesApi = new Hono<AppEnv>()
     const candidates: SyncCandidate[] = [];
     for (const date of datesBetween(input.startDate, input.endDate)) {
       for (const dataset of datasets) {
-        if (dataset !== "ga4_landing_pages" && date < gscFrom) continue;
-        const property = dataset === "ga4_landing_pages" ? site.ga4PropertyId : site.gscProperty;
+        if (!isGa4Dataset(dataset) && date < gscFrom) continue;
+        const property = isGa4Dataset(dataset) ? site.ga4PropertyId : site.gscProperty;
         if (property === null) continue;
         candidates.push({ siteId: site.id, dataset, date, property });
       }

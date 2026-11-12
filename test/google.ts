@@ -105,3 +105,12 @@ export function ga4Rows(count: number, date: string, from = 0) {
     metricValues: [{ value: String(5 + ((from + i) % 3)) }, { value: String(2 + ((from + i) % 2)) }, { value: "1.5" }],
   }));
 }
+
+// The rows of a runReport response of ga4_pages: hostName, pagePath, screenPageViews and userEngagementDuration.
+export function ga4PageRows(count: number, date: string, from = 0) {
+  const compact = date.replace(/-/g, "");
+  return Array.from({ length: count }, (_, i) => ({
+    dimensionValues: [{ value: compact }, { value: "example.com" }, { value: `/p/${from + i}` }],
+    metricValues: [{ value: String(3 + ((from + i) % 4)) }, { value: "12.5" }],
+  }));
+}

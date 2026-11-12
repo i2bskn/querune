@@ -16,6 +16,13 @@ export function formatPercent(ratio: number, digits = 1): string {
   return `${(ratio * 100).toFixed(digits)}%`;
 }
 
+// Seconds: "42.5秒" below a minute, "1分05秒" from a minute.
+export function formatSeconds(value: number): string {
+  if (Math.round(value * 10) < 600) return `${value.toFixed(1)}秒`;
+  const total = Math.round(value);
+  return `${Math.floor(total / 60)}分${String(total % 60).padStart(2, "0")}秒`;
+}
+
 export function formatPosition(value: number): string {
   return value.toFixed(1);
 }
