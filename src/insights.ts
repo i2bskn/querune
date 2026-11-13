@@ -17,6 +17,7 @@ import type { SiteRow } from "./db/schema";
 import type { ArticleRow } from "./db/schema";
 import { SEARCH_CONSOLE_TIME_ZONE } from "./sync/consumer";
 import { addDays, datesBetween, isValidDate, todayUtc } from "./sync/dates";
+import type { Dataset } from "./sync/enqueue";
 import {
   aggregateStatement,
   coverageStatement,
@@ -26,6 +27,7 @@ import {
   type Period,
 } from "./sync/queries";
 import { dayStateOf } from "./sync/status";
+import { ga4TimeZoneKey, ga4TimeZonesStatement } from "./sync/time-zones";
 
 export const INSIGHTS_DAYS_DEFAULT = 28;
 export const INSIGHTS_DAYS_MAX = 180;
@@ -130,6 +132,7 @@ function coverageOf(raw: ReturnType<ReturnType<typeof coverageStatement>["read"]
     provisional_days: raw.provisional_days,
     missing_days: raw.days - raw.available_days,
     pending_days: raw.pending_days,
+    upcoming_days: raw.upcoming_days,
     truncated_days: raw.truncated_days,
     time_zone: raw.time_zone,
   };
@@ -156,6 +159,42 @@ export async function getInsights(d1: D1Database, site: SiteRow, input: Insights
     readers.push(read);
   };
 
+  // The time zone recorded for the GA4 property, read before the coverages: it gives their expected latest date, as in
+  // the scheduled imports.
+  let ga4TimeZone: string | null = null;
+  if ((readSessions || readPageViews) && site.ga4PropertyId !== null) {
+    const ga4Property = site.ga4PropertyId;
+    const zones = ga4TimeZonesStatement(d1, site.id);
+    push(zones.statement, (rows) => {
+      ga4TimeZone = zones.read(rows).get(ga4TimeZoneKey(site.id, ga4Property)) ?? null;
+    });
+  }
+
+  // The days of a dataset imported completely (not truncated, not thresholded), of the current property only: on these
+  // days, no row means 0. Read before the daily series that use them.
+  const completeDaysOf = (dataset: Dataset, property: string): (() => Set<string>) => {
+    let dates = new Set<string>();
+    push(
+      d1
+        .prepare(
+          `SELECT date, last_succeeded_at, last_truncated, last_thresholded FROM sync_days
+          WHERE site_id = ? AND dataset = ? AND property = ? AND date >= ? AND date <= ?`,
+        )
+        .bind(site.id, dataset, property, previous.start, current.end),
+      (rows) => {
+        dates = new Set(
+          rows
+            .filter(
+              (row) =>
+                row.last_succeeded_at !== null && Number(row.last_truncated ?? 0) !== 1 && Number(row.last_thresholded ?? 0) !== 1,
+            )
+            .map((row) => String(row.date)),
+        );
+      },
+    );
+    return () => dates;
+  };
+
   let search: InsightsResponse["search"] = null;
   if (readSearch && site.gscProperty !== null) {
     const property = site.gscProperty;
@@ -168,9 +207,10 @@ export async function getInsights(d1: D1Database, site: SiteRow, input: Insights
       previous_totals: searchTotals({}),
       pages: [],
       queries: [],
-      coverage: { days: 0, available_days: 0, provisional_days: 0, missing_days: 0, pending_days: 0, truncated_days: 0, time_zone: null },
+      coverage: { days: 0, available_days: 0, provisional_days: 0, missing_days: 0, pending_days: 0, upcoming_days: 0, truncated_days: 0, time_zone: null },
     };
     search = result;
+    const completeDays = completeDaysOf("gsc_pages", property);
     push(
       d1
         .prepare(
@@ -183,8 +223,11 @@ export async function getInsights(d1: D1Database, site: SiteRow, input: Insights
         const byDate = new Map(rows.map((row) => [String(row.date), row]));
         const current_: MetricValues = { clicks: 0, impressions: 0, weighted_position: 0 };
         const previous_: MetricValues = { clicks: 0, impressions: 0, weighted_position: 0 };
+        const complete = completeDays();
         for (const date of datesBetween(previous.start, current.end)) {
           const row = byDate.get(date);
+          // A day without rows is 0 when it was imported completely, unknown otherwise.
+          const known = row !== undefined || complete.has(date);
           const clicks = Number(row?.clicks ?? 0);
           const impressions = Number(row?.impressions ?? 0);
           const wp = Number(row?.wp ?? 0);
@@ -194,9 +237,9 @@ export async function getInsights(d1: D1Database, site: SiteRow, input: Insights
           target.weighted_position = (target.weighted_position ?? 0) + wp;
           result.daily.push({
             date,
-            clicks: row === undefined ? null : clicks,
-            impressions: row === undefined ? null : impressions,
-            position: row === undefined ? null : ratio(wp, impressions, 1),
+            clicks: known ? clicks : null,
+            impressions: known ? impressions : null,
+            position: known ? ratio(wp, impressions, 1) : null,
           });
         }
         result.totals = searchTotals(current_);
@@ -240,6 +283,7 @@ export async function getInsights(d1: D1Database, site: SiteRow, input: Insights
       property,
       period: current,
       fixedTimeZone: SEARCH_CONSOLE_TIME_ZONE,
+      now,
     });
     push(coverage.statement, (rows) => (result.coverage = coverageOf(coverage.read(rows))));
   }
@@ -254,9 +298,10 @@ export async function getInsights(d1: D1Database, site: SiteRow, input: Insights
       previous_totals: sessionTotals({}),
       channels: [],
       landing_pages: [],
-      coverage: { days: 0, available_days: 0, provisional_days: 0, missing_days: 0, pending_days: 0, truncated_days: 0, time_zone: null },
+      coverage: { days: 0, available_days: 0, provisional_days: 0, missing_days: 0, pending_days: 0, upcoming_days: 0, truncated_days: 0, time_zone: null },
     };
     sessions = result;
+    const completeDays = completeDaysOf("ga4_landing_pages", property);
     const pageFilter = landingPage === null ? [] : [{ sql: "landing_page = ?", values: [landingPage] }];
     push(
       d1
@@ -270,8 +315,11 @@ export async function getInsights(d1: D1Database, site: SiteRow, input: Insights
         const byDate = new Map(rows.map((row) => [String(row.date), row]));
         const current_: MetricValues = { sessions: 0, engaged_sessions: 0, key_events: 0 };
         const previous_: MetricValues = { sessions: 0, engaged_sessions: 0, key_events: 0 };
+        const complete = completeDays();
         for (const date of datesBetween(previous.start, current.end)) {
           const row = byDate.get(date);
+          // A day without rows is 0 when it was imported completely, unknown otherwise.
+          const known = row !== undefined || complete.has(date);
           const s = Number(row?.sessions ?? 0);
           const e = Number(row?.engaged ?? 0);
           const k = Number(row?.key_events ?? 0);
@@ -281,9 +329,9 @@ export async function getInsights(d1: D1Database, site: SiteRow, input: Insights
           target.key_events = (target.key_events ?? 0) + k;
           result.daily.push({
             date,
-            sessions: row === undefined ? null : s,
-            engaged_sessions: row === undefined ? null : e,
-            key_events: row === undefined ? null : Math.round(k * 100) / 100,
+            sessions: known ? s : null,
+            engaged_sessions: known ? e : null,
+            key_events: known ? Math.round(k * 100) / 100 : null,
           });
         }
         result.totals = sessionTotals(current_);
@@ -321,8 +369,9 @@ export async function getInsights(d1: D1Database, site: SiteRow, input: Insights
       property,
       period: current,
       fixedTimeZone: null,
+      now,
     });
-    push(coverage.statement, (rows) => (result.coverage = coverageOf(coverage.read(rows))));
+    push(coverage.statement, (rows) => (result.coverage = coverageOf(coverage.read(rows, ga4TimeZone))));
   }
 
   let pageViews: InsightsResponse["page_views"] = null;
@@ -334,6 +383,7 @@ export async function getInsights(d1: D1Database, site: SiteRow, input: Insights
       provisional_days: 0,
       missing_days: 0,
       pending_days: 0,
+      upcoming_days: 0,
       truncated_days: 0,
       time_zone: null,
       thresholded_days: 0,
@@ -426,9 +476,10 @@ export async function getInsights(d1: D1Database, site: SiteRow, input: Insights
         period,
         fixedTimeZone: null,
         withThresholded: true,
+        now,
       });
       push(coverage.statement, (rows) => {
-        const raw = coverage.read(rows);
+        const raw = coverage.read(rows, ga4TimeZone);
         assign({ ...coverageOf(raw), thresholded_days: raw.thresholded_days ?? 0 });
       });
     };

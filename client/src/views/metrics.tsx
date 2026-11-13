@@ -59,13 +59,15 @@ export function KpiButton({
 }
 
 // The state of the data of one source for the period: the imported days, the provisional ones, the days waiting for
-// their import and the missing ones (not imported and not waiting: failed or never imported). Only missing days warn;
-// the days waiting are shown in a neutral color.
+// their import, the days not due yet (upcoming: from yesterday in the time zone of the source on, before the next
+// scheduled import) and the missing ones (failed or never imported). Only missing days warn; the days waiting and the
+// upcoming ones are shown in a neutral color. The upcoming days are not linked: the data screen does not show them so.
 export function FreshnessItem({ label, coverage, siteId }: { label: string; coverage: InsightsCoverage; siteId: string }) {
   const pending = coverage.pending_days;
-  const missing = coverage.missing_days - pending;
+  const upcoming = coverage.upcoming_days;
+  const missing = coverage.missing_days - pending - upcoming;
   return (
-    <li className={missing > 0 ? "freshness-warn" : pending > 0 ? "freshness-pending" : undefined}>
+    <li className={missing > 0 ? "freshness-warn" : pending > 0 || upcoming > 0 ? "freshness-pending" : undefined}>
       <span className="freshness-source">{label}</span>
       <span>
         {coverage.available_days}/{coverage.days} 日
@@ -76,6 +78,7 @@ export function FreshnessItem({ label, coverage, siteId }: { label: string; cove
           取得待ち {pending} 日
         </Link>
       )}
+      {upcoming > 0 && <span className="freshness-upcoming">集計前 {upcoming} 日</span>}
       {missing > 0 && (
         <Link to={`/sites/${siteId}/data`} className="freshness-link">
           欠損 {missing} 日

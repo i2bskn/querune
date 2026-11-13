@@ -358,6 +358,7 @@ describe("query_search_performance", () => {
         truncated_days: 0,
         refreshing_days: 1,
         pending_days: 0,
+        upcoming_days: 0,
         missing_dates: ["2026-10-03"],
         missing_dates_truncated: false,
         provisional_dates: ["2026-10-02"],
@@ -469,6 +470,42 @@ describe("query_search_performance", () => {
     expect(underscore.rows).toEqual([
       { page: "https://example.com/b", query: "Snake_Case", clicks: 1, impressions: 10, ctr: 0.1, position: 3 },
     ]);
+  });
+
+  it("counts the days without rows from yesterday in Pacific Time on as upcoming, and notes them", async () => {
+    // 2026-11-13 04:00 UTC: 2026-11-12 20:00 in Los Angeles, so yesterday is 2026-11-11.
+    vi.spyOn(clock, "now").mockReturnValue(Date.UTC(2026, 10, 13, 4, 0, 0));
+    // 2026-11-11 (yesterday) failed: missing. 2026-11-13 queued: pending.
+    for (const [date, status] of [["2026-11-11", "failed"], ["2026-11-13", "queued"]]) {
+      await env.DB.prepare(
+        "INSERT INTO sync_days (site_id, dataset, date, property, status, run_id, queued_at) VALUES (?, 'gsc_pages', ?, ?, ?, 'r', 1)",
+      )
+        .bind(site.id, date, GSC, status)
+        .run();
+    }
+    // 2026-11-09 and 2026-11-10 without rows: missing. 2026-11-12 and 2026-11-14 to 2026-11-20 without rows: upcoming.
+    const body = parse<SearchBody>(await query({ start_date: "2026-11-09", end_date: "2026-11-20" }));
+    expect(body.coverage.current).toMatchObject({ days: 12, available_days: 0, pending_days: 1, upcoming_days: 8 });
+    expect((body.coverage.current.missing_dates as string[]).length).toBe(12);
+    expect(body.notes).toEqual([
+      "Search Console の日付は太平洋時間です。",
+      "取得待ちか取り込み中の日（coverage の pending_days）があります。取り込みが終わると値が変わります。",
+      "集計前の日（coverage の upcoming_days）があります。その日はまだ取り込みの時期になっていません。",
+    ]);
+    // A period that is all in the future: every day is upcoming.
+    const future = parse<SearchBody>(await query({ start_date: "2026-11-14", end_date: "2026-11-20" }));
+    expect(future.coverage.current).toMatchObject({ days: 7, available_days: 0, pending_days: 0, upcoming_days: 7 });
+    expect(future.coverage.current.missing_dates).toHaveLength(7);
+    // The previous period counts its own upcoming days.
+    const compared = parse<SearchBody>(
+      await query({ start_date: "2026-10-01", end_date: "2026-10-02", compare_start_date: "2026-11-12", compare_end_date: "2026-11-12" }),
+    );
+    expect(compared.coverage.current).toMatchObject({ upcoming_days: 0 });
+    expect(compared.coverage.previous).toMatchObject({ upcoming_days: 1 });
+    expect(compared.notes).toContain("集計前の日（coverage の upcoming_days）があります。その日はまだ取り込みの時期になっていません。");
+    const past = parse<SearchBody>(await query({ start_date: "2026-11-09", end_date: "2026-11-10" }));
+    expect(past.coverage.current).toMatchObject({ upcoming_days: 0 });
+    expect(past.notes.some((note) => note.includes("upcoming_days"))).toBe(false);
   });
 
   it("notes the truncated days", async () => {
@@ -811,6 +848,41 @@ describe("query_page_views", () => {
     expect(complete.notes.some((note) => note.includes("pending_days"))).toBe(false);
   });
 
+  it("counts the upcoming days in the time zone of the property, and notes them after the days waiting", async () => {
+    // 2026-10-06 04:00 UTC: 2026-10-06 13:00 in Tokyo (yesterday 2026-10-05); 2026-10-05 16:00 in Etc/GMT+12.
+    vi.spyOn(clock, "now").mockReturnValue(Date.UTC(2026, 9, 6, 4, 0, 0));
+    await env.DB.prepare(
+      "UPDATE sync_days SET last_thresholded = 1, last_truncated = 1 WHERE dataset = 'ga4_pages' AND date = '2026-10-02'",
+    ).run();
+    await env.DB.prepare(
+      "INSERT INTO sync_days (site_id, dataset, date, property, status, run_id, queued_at) VALUES (?, 'ga4_pages', '2026-10-03', ?, 'queued', 'r', 1)",
+    )
+      .bind(site.id, GA4)
+      .run();
+    // 2026-10-04 without rows: missing. 2026-10-05 (yesterday) and 2026-10-06 (today) without rows: upcoming.
+    const body = parse<PageViewsBody>(await query({ start_date: "2026-10-01", end_date: "2026-10-06" }));
+    expect(body.coverage.current).toMatchObject({
+      days: 6,
+      available_days: 2,
+      pending_days: 1,
+      upcoming_days: 2,
+      missing_dates: ["2026-10-03", "2026-10-04", "2026-10-05", "2026-10-06"],
+    });
+    expect(body.notes).toEqual([
+      ...REQUIRED_NOTES,
+      "行数の上限で一部だけを取り込んだ日があります。",
+      "取得待ちか取り込み中の日（coverage の pending_days）があります。取り込みが終わると値が変わります。",
+      "集計前の日（coverage の upcoming_days）があります。その日はまだ取り込みの時期になっていません。",
+      "GA4 のしきい値か (other) 行への集約の対象になった日（coverage の thresholded_days）は、一部のページの行が含まれていない可能性があります。",
+    ]);
+    // query_landing_sessions reads the time zone of the property as well (recorded by ga4_pages here).
+    const sessions = parse<PageViewsBody>(
+      await callTool(alice, "query_landing_sessions", { site_id: site.id, start_date: "2026-10-04", end_date: "2026-10-06" }),
+    );
+    expect(sessions.coverage.current).toMatchObject({ days: 3, missing_dates: ["2026-10-04", "2026-10-05", "2026-10-06"], upcoming_days: 2 });
+    expect(sessions.notes).toContain("集計前の日（coverage の upcoming_days）があります。その日はまだ取り込みの時期になっていません。");
+  });
+
   it("keeps the views apart from the sessions of query_landing_sessions", async () => {
     await insertDays(site.id, "ga4_landing_pages", GA4, ["2026-10-01"], { last_time_zone: "Asia/Tokyo" });
     const views = parse<PageViewsBody>(await query({ start_date: "2026-10-01", end_date: "2026-10-01", page_path: "/a", host_name: "example.com" }));
@@ -861,6 +933,7 @@ describe("the outputs of the existing aggregation tools", () => {
       "start_date",
       "time_zone",
       "truncated_days",
+      "upcoming_days",
     ];
     for (const name of ["query_search_performance", "query_landing_sessions"]) {
       const body = parse<{ coverage: { current: Record<string, unknown>; previous: Record<string, unknown> } } & Record<string, unknown>>(

@@ -7,6 +7,7 @@ import { sites, type SiteRow, type UserRow } from "../db/schema";
 import { SITE_ID_PATTERN } from "../ids";
 import { listSites } from "../routes/sites";
 import { SEARCH_CONSOLE_TIME_ZONE } from "../sync/consumer";
+import { isGa4Dataset } from "../db/schema";
 import { daysBetween, isValidDate } from "../sync/dates";
 import type { Dataset } from "../sync/enqueue";
 import {
@@ -20,6 +21,7 @@ import {
   pagePathVariants,
 } from "../sync/queries";
 import { getSyncStatus } from "../sync/status";
+import { ga4TimeZoneKey, ga4TimeZonesStatement } from "../sync/time-zones";
 import { registerRecordTools } from "./record-tools";
 import { ok, readOnlyAnnotations, safely, toolError } from "./results";
 
@@ -42,6 +44,7 @@ const MAX_DAYS = 400;
 const MAX_QUERY_DAYS = 100;
 const truncatedNote = "行数の上限で一部だけを取り込んだ日があります。";
 const pendingNote = "取得待ちか取り込み中の日（coverage の pending_days）があります。取り込みが終わると値が変わります。";
+const upcomingNote = "集計前の日（coverage の upcoming_days）があります。その日はまだ取り込みの時期になっていません。";
 const provisionalNote = "速報値の日（provisional_dates）は今後変わることがあります。";
 const ga4EstimateNote = "GA4 の確定は API で判定できないため、経過日数による推定です。";
 const thresholdedNote =
@@ -49,6 +52,10 @@ const thresholdedNote =
 
 function hasPending(coverage: { current: Coverage; previous: Coverage | null }): boolean {
   return coverage.current.pending_days > 0 || (coverage.previous?.pending_days ?? 0) > 0;
+}
+
+function hasUpcoming(coverage: { current: Coverage; previous: Coverage | null }): boolean {
+  return coverage.current.upcoming_days > 0 || (coverage.previous?.upcoming_days ?? 0) > 0;
 }
 
 function hasProvisional(coverage: { current: Coverage; previous: Coverage | null }): boolean {
@@ -199,12 +206,14 @@ function pageViewMetrics(values: MetricValues) {
 
 const NULL_PAGE_VIEW_METRICS = { views: null, engagement_seconds: null, avg_engagement_seconds_per_view: null };
 
-// Runs the aggregation and the coverage of each period in one D1 batch.
+// Runs the aggregation and the coverage of each period in one D1 batch. For GA4, the time zone recorded for the
+// property is read in the same batch: it gives the expected latest date of the coverage, as in the scheduled imports.
 async function aggregate(
   db: Db,
   query: AggregateQuery,
   dataset: Dataset,
   fixedTimeZone: string | null,
+  now: number,
   withThresholded = false,
 ): Promise<{ result: AggregateResult; coverage: { current: Coverage; previous: Coverage | null } }> {
   const d1 = db.$client;
@@ -216,18 +225,25 @@ async function aggregate(
       property: query.property,
       period,
       fixedTimeZone,
+      now,
       ...(withThresholded ? { withThresholded: true } : {}),
     });
   const current = coverageOf(query.current);
   const previous = query.previous === null ? null : coverageOf(query.previous);
+  const zones = isGa4Dataset(dataset) ? ga4TimeZonesStatement(d1, query.siteId) : null;
   const statements = [main.statement, current.statement];
   if (previous !== null) statements.push(previous.statement);
+  if (zones !== null) statements.push(zones.statement);
   const results = await d1.batch<Record<string, unknown>>(statements);
+  const ga4TimeZone =
+    zones === null
+      ? null
+      : (zones.read(results[statements.length - 1]?.results ?? []).get(ga4TimeZoneKey(query.siteId, query.property)) ?? null);
   return {
     result: main.read(results[0]?.results ?? []),
     coverage: {
-      current: current.read(results[1]?.results ?? []),
-      previous: previous === null ? null : previous.read(results[2]?.results ?? []),
+      current: current.read(results[1]?.results ?? [], ga4TimeZone),
+      previous: previous === null ? null : previous.read(results[2]?.results ?? [], ga4TimeZone),
     },
   };
 }
@@ -355,6 +371,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           },
           dataset,
           SEARCH_CONSOLE_TIME_ZONE,
+          clock.now(),
         );
         const compared = periods.previous !== null;
         const notes = ["Search Console の日付は太平洋時間です。"];
@@ -362,6 +379,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         if (hasProvisional(coverage)) notes.push(provisionalNote);
         if (coverage.current.truncated_days > 0 || (coverage.previous?.truncated_days ?? 0) > 0) notes.push(truncatedNote);
         if (hasPending(coverage)) notes.push(pendingNote);
+        if (hasUpcoming(coverage)) notes.push(upcomingNote);
         return ok({
           site_id: site.id,
           group_by: args.group_by,
@@ -437,6 +455,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           },
           "ga4_landing_pages",
           null,
+          clock.now(),
         );
         const compared = periods.previous !== null;
         const notes = [
@@ -447,6 +466,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         if (hasProvisional(coverage)) notes.push(provisionalNote);
         if (coverage.current.truncated_days > 0 || (coverage.previous?.truncated_days ?? 0) > 0) notes.push(truncatedNote);
         if (hasPending(coverage)) notes.push(pendingNote);
+        if (hasUpcoming(coverage)) notes.push(upcomingNote);
         return ok({
           site_id: site.id,
           group_by: args.group_by,
@@ -526,6 +546,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           },
           "ga4_pages",
           null,
+          clock.now(),
           true,
         );
         const compared = periods.previous !== null;
@@ -542,6 +563,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         if (hasProvisional(coverage)) notes.push(provisionalNote);
         if (coverage.current.truncated_days > 0 || (coverage.previous?.truncated_days ?? 0) > 0) notes.push(truncatedNote);
         if (hasPending(coverage)) notes.push(pendingNote);
+        if (hasUpcoming(coverage)) notes.push(upcomingNote);
         if ((coverage.current.thresholded_days ?? 0) > 0 || (coverage.previous?.thresholded_days ?? 0) > 0) {
           notes.push(thresholdedNote);
         }

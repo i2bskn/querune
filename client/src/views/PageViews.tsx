@@ -110,7 +110,7 @@ export function PageViewsPanel({
           })}
         </div>
         {!comparable && (
-          <p className="hint">この期間か前の期間に取得待ちか欠損の日があるため、前の期間との比較は出していません。</p>
+          <p className="hint">この期間か前の期間にまだ取り込めていない日があるため、前の期間との比較は出していません。</p>
         )}
         {thresholded && (
           <p className="hint">GA4 のしきい値・(other) 行の影響で一部の行が含まれていない可能性があります。</p>

@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clock } from "@i2bskn/workers-app-core";
 import type { Article, InsightsOverview, InsightsResponse, Memo, MemoList } from "../src/api/types";
 import { newArticleId } from "../src/ids";
 import { createSite, createUser, login, resetDb, send, type SessionCookies } from "./helpers";
@@ -10,6 +11,10 @@ beforeEach(async () => {
   await resetDb();
   const member = await createUser({ email: "member@example.com" });
   cookies = await login(member.email);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 const GSC = "sc-domain:example.com";
@@ -226,13 +231,19 @@ async function markDay(
   dataset: string,
   property: string,
   date: string,
-  day: { status?: string; succeeded?: boolean; state?: "final" | "provisional"; thresholded?: number | null } = {},
+  day: {
+    status?: string;
+    succeeded?: boolean;
+    state?: "final" | "provisional";
+    thresholded?: number | null;
+    truncated?: number | null;
+  } = {},
 ) {
   const succeeded = day.succeeded ?? true;
   await env.DB.prepare(
     `INSERT INTO sync_days (site_id, dataset, date, property, status, run_id, queued_at, last_succeeded_at, last_data_state,
-      last_time_zone, last_thresholded)
-    VALUES (?, ?, ?, ?, ?, 'run', 1, ?, ?, ?, ?)`,
+      last_time_zone, last_thresholded, last_truncated)
+    VALUES (?, ?, ?, ?, ?, 'run', 1, ?, ?, ?, ?, ?)`,
   )
     .bind(
       siteId,
@@ -244,6 +255,7 @@ async function markDay(
       succeeded ? (day.state ?? "final") : null,
       succeeded ? "Asia/Tokyo" : null,
       day.thresholded ?? null,
+      day.truncated ?? null,
     )
     .run();
 }
@@ -308,6 +320,7 @@ describe("GET /api/v1/sites/:id/insights page_views", () => {
       provisional_days: 0,
       missing_days: 0,
       pending_days: 0,
+      upcoming_days: 0,
       truncated_days: 0,
       time_zone: "Asia/Tokyo",
       thresholded_days: 0,
@@ -431,7 +444,7 @@ describe("GET /api/v1/sites/:id/insights page_views", () => {
     expect(JSON.stringify(body.page_views)).not.toMatch(/user/i);
   });
 
-  it("keeps the keys of search and sessions, with pending_days added to the coverage", async () => {
+  it("keeps the keys of search and sessions, with pending_days and upcoming_days added to the coverage", async () => {
     const site = await createSite({ url: "https://example.com", gscProperty: GSC, ga4PropertyId: GA4 });
     await insertSearch(site.id, [["2026-01-04", "https://example.com/a", 1, 10, 4]]);
     await insertSessions(site.id, "2026-01-04", "/a", "Organic Search", 6, 3);
@@ -443,13 +456,13 @@ describe("GET /api/v1/sites/:id/insights page_views", () => {
       ["coverage", "daily", "pages", "previous_totals", "property", "queries", "time_zone", "totals"].sort(),
     );
     expect(Object.keys(body.search?.coverage ?? {}).sort()).toEqual(
-      ["available_days", "days", "missing_days", "pending_days", "provisional_days", "time_zone", "truncated_days"].sort(),
+      ["available_days", "days", "missing_days", "pending_days", "provisional_days", "time_zone", "truncated_days", "upcoming_days"].sort(),
     );
     expect(Object.keys(body.sessions ?? {}).sort()).toEqual(
       ["channels", "coverage", "daily", "landing_pages", "previous_totals", "property", "totals"].sort(),
     );
     expect(Object.keys(body.sessions?.coverage ?? {}).sort()).toEqual(
-      ["available_days", "days", "missing_days", "pending_days", "provisional_days", "time_zone", "truncated_days"].sort(),
+      ["available_days", "days", "missing_days", "pending_days", "provisional_days", "time_zone", "truncated_days", "upcoming_days"].sort(),
     );
     expect(Object.keys(body.sessions?.daily[0] ?? {}).sort()).toEqual(["date", "engaged_sessions", "key_events", "sessions"]);
   });
@@ -461,5 +474,94 @@ describe("GET /api/v1/sites/:id/insights page_views", () => {
     await markDay(site.id, "ga4_pages", GA4, "2026-02-14");
     const body = await insightsOf(site.id, "days=7");
     expect(body.period.end).toBe("2026-02-11");
+  });
+});
+
+describe("GET /api/v1/sites/:id/insights daily and coverage of the days without rows", () => {
+  it("returns 0 on a day of search and sessions imported completely without rows, and null otherwise", async () => {
+    const site = await createSite({ url: "https://example.com", gscProperty: GSC, ga4PropertyId: GA4 });
+    await insertSearch(site.id, [["2026-01-01", "https://example.com/a", 1, 10, 4]]);
+    await markDay(site.id, "gsc_pages", GSC, "2026-01-01");
+    // Imported without rows: 0.
+    await markDay(site.id, "gsc_pages", GSC, "2026-01-02");
+    // Truncated without rows: not known to be 0.
+    await markDay(site.id, "gsc_pages", GSC, "2026-01-03", { truncated: 1 });
+    // 2026-01-04 is not imported. A day of another property and of gsc_queries do not count.
+    await markDay(site.id, "gsc_pages", "sc-domain:other.example", "2026-01-04");
+    await markDay(site.id, "gsc_queries", GSC, "2026-01-04");
+    await insertSessions(site.id, "2026-01-03", "/a", "Organic Search", 6, 3);
+    await markDay(site.id, "ga4_landing_pages", GA4, "2026-01-01");
+    // Thresholded without rows: not known to be 0.
+    await markDay(site.id, "ga4_landing_pages", GA4, "2026-01-02", { thresholded: 1 });
+    // Failed with no success: null.
+    await markDay(site.id, "ga4_landing_pages", GA4, "2026-01-04", { status: "failed", succeeded: false });
+
+    const body = await insightsOf(site.id, "days=2&end=2026-01-04");
+    expect(body.search?.daily).toEqual([
+      { date: "2026-01-01", clicks: 1, impressions: 10, position: 4 },
+      { date: "2026-01-02", clicks: 0, impressions: 0, position: null },
+      { date: "2026-01-03", clicks: null, impressions: null, position: null },
+      { date: "2026-01-04", clicks: null, impressions: null, position: null },
+    ]);
+    expect(body.search?.totals).toEqual({ clicks: 0, impressions: 0, ctr: null, position: null });
+    expect(body.search?.previous_totals).toEqual({ clicks: 1, impressions: 10, ctr: 0.1, position: 4 });
+    expect(body.sessions?.daily).toEqual([
+      { date: "2026-01-01", sessions: 0, engaged_sessions: 0, key_events: 0 },
+      { date: "2026-01-02", sessions: null, engaged_sessions: null, key_events: null },
+      // Rows without an import: their values, as before.
+      { date: "2026-01-03", sessions: 6, engaged_sessions: 3, key_events: 0 },
+      { date: "2026-01-04", sessions: null, engaged_sessions: null, key_events: null },
+    ]);
+    expect(body.sessions?.totals).toEqual({ sessions: 6, engaged_sessions: 3, engagement_rate: 0.5, key_events: 0 });
+  });
+
+  it("returns 0 on an imported day without rows of the article", async () => {
+    const site = await createSite({ url: "https://example.com", gscProperty: GSC, ga4PropertyId: GA4 });
+    await insertSearch(site.id, [["2026-01-04", "https://example.com/b", 2, 100, 7]]);
+    await insertSessions(site.id, "2026-01-04", "/b", "Organic Search", 9, 3);
+    await markDay(site.id, "gsc_pages", GSC, "2026-01-04");
+    await markDay(site.id, "ga4_landing_pages", GA4, "2026-01-04");
+    const article = await createArticle(site.id, "https://example.com/a");
+    const body = await insightsOf(site.id, `days=1&end=2026-01-04&article_id=${article.id}`);
+    expect(body.search?.daily).toEqual([
+      { date: "2026-01-03", clicks: null, impressions: null, position: null },
+      { date: "2026-01-04", clicks: 0, impressions: 0, position: null },
+    ]);
+    expect(body.sessions?.daily).toEqual([
+      { date: "2026-01-03", sessions: null, engaged_sessions: null, key_events: null },
+      { date: "2026-01-04", sessions: 0, engaged_sessions: 0, key_events: 0 },
+    ]);
+  });
+
+  it("counts the days without rows from yesterday in the time zone of each dataset on as upcoming", async () => {
+    // 2026-11-13 04:00 UTC: 2026-11-12 20:00 in Los Angeles (yesterday 2026-11-11), 2026-11-13 13:00 in Tokyo
+    // (yesterday 2026-11-12), 2026-11-12 16:00 in Etc/GMT+12 (yesterday 2026-11-11).
+    vi.spyOn(clock, "now").mockReturnValue(Date.UTC(2026, 10, 13, 4, 0, 0));
+    const site = await createSite({ gscProperty: GSC, ga4PropertyId: GA4 });
+    // Search Console, 2026-11-09 to 2026-11-13: 2026-11-09 without rows (missing), 2026-11-10 failed (missing),
+    // 2026-11-11 (yesterday) and 2026-11-12 (today) without rows (upcoming), 2026-11-13 queued (pending).
+    await markDay(site.id, "gsc_pages", GSC, "2026-11-10", { status: "failed", succeeded: false });
+    await markDay(site.id, "gsc_pages", GSC, "2026-11-13", { status: "queued", succeeded: false });
+    // GA4 in Tokyo: 2026-11-09 imported, 2026-11-10 and 2026-11-11 without rows (missing), 2026-11-12 (yesterday)
+    // failed (missing), 2026-11-13 (today) without rows (upcoming).
+    await markDay(site.id, "ga4_landing_pages", GA4, "2026-11-09");
+    await markDay(site.id, "ga4_landing_pages", GA4, "2026-11-12", { status: "failed", succeeded: false });
+
+    const body = await insightsOf(site.id, "days=5&end=2026-11-13");
+    expect(body.search?.coverage).toEqual({
+      days: 5,
+      available_days: 0,
+      provisional_days: 0,
+      missing_days: 5,
+      pending_days: 1,
+      upcoming_days: 2,
+      truncated_days: 0,
+      time_zone: "America/Los_Angeles",
+    });
+    // With the time zone of the property (Tokyo), not the latest one on earth, 2026-11-11 is not upcoming.
+    expect(body.sessions?.coverage).toMatchObject({ days: 5, available_days: 1, missing_days: 4, pending_days: 0, upcoming_days: 1 });
+    // ga4_pages has no row: 2026-11-12 and 2026-11-13 are upcoming in the time zone of the property.
+    expect(body.page_views?.coverage).toMatchObject({ days: 5, available_days: 0, missing_days: 5, upcoming_days: 2 });
+    expect(body.page_views?.previous_coverage).toMatchObject({ days: 5, missing_days: 5, upcoming_days: 0 });
   });
 });

@@ -1425,6 +1425,12 @@ a.tag:hover {
   color: var(--ink-2);
 }
 
+/* Days not due yet: neutral like the days waiting, and not a link. */
+.freshness-upcoming {
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
 .kpi-groups {
   display: grid;
   gap: 1rem;

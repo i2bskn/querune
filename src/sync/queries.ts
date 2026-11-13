@@ -3,6 +3,7 @@
 
 import type { Dataset } from "./enqueue";
 import { datesBetween } from "./dates";
+import { datasetDayOf } from "./time-zones";
 
 export type Period = { start: string; end: string };
 
@@ -134,6 +135,10 @@ export type Coverage = {
   refreshing_days: number;
   // The days not imported yet whose import is queued or running: a part of the missing days.
   pending_days: number;
+  // The missing days without any import of the current property that are not over yet, or whose scheduled import has
+  // not come yet: from the expected latest date of the dataset (yesterday in its time zone) on. A part of the missing
+  // days, apart from the pending ones.
+  upcoming_days: number;
   missing_dates: string[];
   missing_dates_truncated: boolean;
   // The available days with provisional data, ascending, up to 31.
@@ -162,7 +167,9 @@ type CoverageRow = {
 
 // The import state of the days of a period, and how to read it. fixedTimeZone is the time zone of every day of the
 // dataset (Search Console); without it, the time zone of the latest successful import is used. withThresholded adds
-// thresholded_days; without it the result has no such key.
+// thresholded_days; without it the result has no such key. now and the ga4TimeZone given to read (the time zone
+// recorded for the GA4 property, ga4TimeZonesStatement; ignored for Search Console) give the expected latest date that
+// upcoming_days counts from.
 export function coverageStatement(
   db: D1Database,
   params: {
@@ -172,8 +179,12 @@ export function coverageStatement(
     period: Period;
     fixedTimeZone: string | null;
     withThresholded?: boolean;
+    now: number;
   },
-): { statement: D1PreparedStatement; read: (rows: Record<string, unknown>[]) => Coverage } {
+): {
+  statement: D1PreparedStatement;
+  read: (rows: Record<string, unknown>[], ga4TimeZone?: string | null) => Coverage;
+} {
   const { period } = params;
   const withThresholded = params.withThresholded === true;
   const statement = db
@@ -184,7 +195,7 @@ export function coverageStatement(
       WHERE site_id = ? AND dataset = ? AND property = ? AND date >= ? AND date <= ?`,
     )
     .bind(params.siteId, params.dataset, params.property, period.start, period.end);
-  const read = (raw: Record<string, unknown>[]): Coverage => {
+  const read = (raw: Record<string, unknown>[], ga4TimeZone?: string | null): Coverage => {
     const rows = raw as CoverageRow[];
     const available = rows.filter((row) => row.last_succeeded_at !== null);
     const availableDates = new Set(available.map((row) => row.date));
@@ -193,6 +204,9 @@ export function coverageStatement(
     const pendingDates = new Set(
       rows.filter((row) => row.last_succeeded_at === null && (row.status === "queued" || row.status === "running")).map((row) => row.date),
     );
+    // A day with a row (failed, queued or running) is not upcoming, whatever its date.
+    const rowDates = new Set(rows.map((row) => row.date));
+    const { expectedLatestDate } = datasetDayOf(params.dataset, ga4TimeZone, params.now);
     const provisional = available
       .filter((row) => row.last_data_state === "provisional")
       .map((row) => row.date)
@@ -207,6 +221,7 @@ export function coverageStatement(
       truncated_days: available.filter((row) => row.last_truncated === 1).length,
       refreshing_days: available.filter((row) => row.status === "queued" || row.status === "running").length,
       pending_days: missing.filter((date) => pendingDates.has(date)).length,
+      upcoming_days: missing.filter((date) => !rowDates.has(date) && date >= expectedLatestDate).length,
       missing_dates: missing.slice(0, MISSING_DATES_LIMIT),
       missing_dates_truncated: missing.length > MISSING_DATES_LIMIT,
       provisional_dates: provisional.slice(0, PROVISIONAL_DATES_LIMIT),
