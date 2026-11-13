@@ -1,3 +1,5 @@
+import type { InsightsCoverage } from "../../../src/api/types";
+import { Link } from "../Link";
 import type { Change } from "../numbers";
 import { type ChartTone, Sparkline } from "./charts";
 
@@ -53,5 +55,32 @@ export function KpiButton({
       </span>
       <Sparkline values={values} previous={previous} tone={tone} invert={invert} />
     </button>
+  );
+}
+
+// The state of the data of one source for the period: the imported days, the provisional ones, the days waiting for
+// their import and the missing ones (not imported and not waiting: failed or never imported). Only missing days warn;
+// the days waiting are shown in a neutral color.
+export function FreshnessItem({ label, coverage, siteId }: { label: string; coverage: InsightsCoverage; siteId: string }) {
+  const pending = coverage.pending_days;
+  const missing = coverage.missing_days - pending;
+  return (
+    <li className={missing > 0 ? "freshness-warn" : pending > 0 ? "freshness-pending" : undefined}>
+      <span className="freshness-source">{label}</span>
+      <span>
+        {coverage.available_days}/{coverage.days} 日
+      </span>
+      {coverage.provisional_days > 0 && <span>直近 {coverage.provisional_days} 日は速報値</span>}
+      {pending > 0 && (
+        <Link to={`/sites/${siteId}/data`} className="freshness-link freshness-link-pending">
+          取得待ち {pending} 日
+        </Link>
+      )}
+      {missing > 0 && (
+        <Link to={`/sites/${siteId}/data`} className="freshness-link">
+          欠損 {missing} 日
+        </Link>
+      )}
+    </li>
   );
 }

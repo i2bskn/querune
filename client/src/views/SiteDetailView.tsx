@@ -19,7 +19,7 @@ import { navigate, searchParams } from "../router";
 import { setCurrentSite } from "../siteContext";
 import { BarRow, type ChartTone, ShareBar, TrendChart } from "./charts";
 import { ViewStatus, useDocumentTitle, viewTitle } from "./common";
-import { Delta, KpiButton } from "./metrics";
+import { Delta, FreshnessItem, KpiButton } from "./metrics";
 import { PageViewsPanel } from "./PageViews";
 
 const GONE_MESSAGE = "サイトが見つかりません。削除された可能性があります";
@@ -336,23 +336,9 @@ function Freshness({ insights, siteId }: { insights: InsightsResponse; siteId: s
   if (insights.page_views !== null) items.push({ label: "GA4 表示回数", coverage: insights.page_views.coverage });
   return (
     <ul className="freshness" aria-label="データの状態">
-      {items.map(({ label, coverage }) => {
-        const warn = coverage.missing_days > 0;
-        return (
-          <li key={label} className={warn ? "freshness-warn" : undefined}>
-            <span className="freshness-source">{label}</span>
-            <span>
-              {coverage.available_days}/{coverage.days} 日
-            </span>
-            {coverage.provisional_days > 0 && <span>直近 {coverage.provisional_days} 日は速報値</span>}
-            {warn && (
-              <Link to={`/sites/${siteId}/data`} className="freshness-link">
-                欠損 {coverage.missing_days} 日
-              </Link>
-            )}
-          </li>
-        );
-      })}
+      {items.map(({ label, coverage }) => (
+        <FreshnessItem key={label} label={label} coverage={coverage} siteId={siteId} />
+      ))}
     </ul>
   );
 }

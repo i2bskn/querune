@@ -1,9 +1,8 @@
 import { useState } from "react";
 import type { InsightsResponse, PageViewRow } from "../../../src/api/types";
-import { Link } from "../Link";
 import { type Change, changeOf, formatCount, formatSeconds } from "../numbers";
 import { BarRow, TrendChart } from "./charts";
-import { Delta, KpiButton } from "./metrics";
+import { Delta, FreshnessItem, KpiButton } from "./metrics";
 
 type PageViews = NonNullable<InsightsResponse["page_views"]>;
 
@@ -89,18 +88,7 @@ export function PageViewsPanel({
           </div>
         </div>
         <ul className="freshness" aria-label="表示回数のデータの状態">
-          <li className={coverage.missing_days > 0 ? "freshness-warn" : undefined}>
-            <span className="freshness-source">GA4 表示回数</span>
-            <span>
-              {coverage.available_days}/{coverage.days} 日
-            </span>
-            {coverage.provisional_days > 0 && <span>直近 {coverage.provisional_days} 日は速報値</span>}
-            {coverage.missing_days > 0 && (
-              <Link to={`/sites/${siteId}/data`} className="freshness-link">
-                欠損 {coverage.missing_days} 日
-              </Link>
-            )}
-          </li>
+          <FreshnessItem label="GA4 表示回数" coverage={coverage} siteId={siteId} />
         </ul>
         <div className="kpi-grid" role="group" aria-label="表示する指標" style={{ "--kpi-count": 2 } as React.CSSProperties}>
           {(["views", "average"] as const).map((id) => {
@@ -122,7 +110,7 @@ export function PageViewsPanel({
           })}
         </div>
         {!comparable && (
-          <p className="hint">この期間か前の期間に未取得の日があるため、前の期間との比較は出していません。</p>
+          <p className="hint">この期間か前の期間に取得待ちか欠損の日があるため、前の期間との比較は出していません。</p>
         )}
         {thresholded && (
           <p className="hint">GA4 のしきい値・(other) 行の影響で一部の行が含まれていない可能性があります。</p>

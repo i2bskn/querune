@@ -357,6 +357,7 @@ describe("query_search_performance", () => {
         provisional_days: 1,
         truncated_days: 0,
         refreshing_days: 1,
+        pending_days: 0,
         missing_dates: ["2026-10-03"],
         missing_dates_truncated: false,
         provisional_dates: ["2026-10-02"],
@@ -785,6 +786,31 @@ describe("query_page_views", () => {
     ]);
   });
 
+  it("counts the days waiting for their import apart from the other missing days, and notes them", async () => {
+    // 2026-10-03 is queued, 2026-10-04 is running, 2026-10-05 failed and 2026-10-06 has no row: all are missing.
+    for (const [date, status] of [["2026-10-03", "queued"], ["2026-10-04", "running"], ["2026-10-05", "failed"]]) {
+      await env.DB.prepare(
+        "INSERT INTO sync_days (site_id, dataset, date, property, status, run_id, queued_at) VALUES (?, 'ga4_pages', ?, ?, ?, 'r', 1)",
+      )
+        .bind(site.id, date, GA4, status)
+        .run();
+    }
+    // An imported day being imported again is refreshing, not pending.
+    await env.DB.prepare("UPDATE sync_days SET status = 'queued' WHERE dataset = 'ga4_pages' AND date = '2026-10-02'").run();
+    const body = parse<PageViewsBody>(await query({ start_date: "2026-10-01", end_date: "2026-10-06" }));
+    expect(body.coverage.current).toMatchObject({
+      days: 6,
+      available_days: 2,
+      refreshing_days: 1,
+      pending_days: 2,
+      missing_dates: ["2026-10-03", "2026-10-04", "2026-10-05", "2026-10-06"],
+    });
+    expect(body.notes).toContain("取得待ちか取り込み中の日（coverage の pending_days）があります。取り込みが終わると値が変わります。");
+    const complete = parse<PageViewsBody>(await query({ start_date: "2026-10-01", end_date: "2026-10-01" }));
+    expect(complete.coverage.current).toMatchObject({ pending_days: 0 });
+    expect(complete.notes.some((note) => note.includes("pending_days"))).toBe(false);
+  });
+
   it("keeps the views apart from the sessions of query_landing_sessions", async () => {
     await insertDays(site.id, "ga4_landing_pages", GA4, ["2026-10-01"], { last_time_zone: "Asia/Tokyo" });
     const views = parse<PageViewsBody>(await query({ start_date: "2026-10-01", end_date: "2026-10-01", page_path: "/a", host_name: "example.com" }));
@@ -827,6 +853,7 @@ describe("the outputs of the existing aggregation tools", () => {
       "end_date",
       "missing_dates",
       "missing_dates_truncated",
+      "pending_days",
       "provisional_dates",
       "provisional_dates_truncated",
       "provisional_days",

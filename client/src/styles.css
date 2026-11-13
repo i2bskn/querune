@@ -1416,6 +1416,15 @@ a.tag:hover {
   color: var(--warning);
 }
 
+/* Days waiting for their import: not a warning, they fill in by themselves. */
+.freshness-pending .freshness-source::before {
+  background: var(--ink-3);
+}
+
+.freshness-link-pending {
+  color: var(--ink-2);
+}
+
 .kpi-groups {
   display: grid;
   gap: 1rem;

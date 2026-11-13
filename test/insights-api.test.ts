@@ -307,6 +307,7 @@ describe("GET /api/v1/sites/:id/insights page_views", () => {
       available_days: 2,
       provisional_days: 0,
       missing_days: 0,
+      pending_days: 0,
       truncated_days: 0,
       time_zone: "Asia/Tokyo",
       thresholded_days: 0,
@@ -346,11 +347,12 @@ describe("GET /api/v1/sites/:id/insights page_views", () => {
       { date: "2026-01-08", views: null, engagement_seconds: null, state: "missing" },
     ]);
     expect(pageViews?.totals).toEqual({ views: 3, engagement_seconds: 3, avg_engagement_seconds_per_view: 1 });
-    expect(pageViews?.coverage).toMatchObject({ days: 4, available_days: 1, provisional_days: 1, missing_days: 3 });
+    // 2026-01-07 (running) waits for its import; 2026-01-05 (failed) and 2026-01-08 (no row) are missing.
+    expect(pageViews?.coverage).toMatchObject({ days: 4, available_days: 1, provisional_days: 1, missing_days: 3, pending_days: 1 });
     // No day of the previous period is imported: null, not 0.
     expect(pageViews?.daily.slice(0, 4).every((day) => day.views === null && day.state === "missing")).toBe(true);
     expect(pageViews?.previous_totals).toEqual({ views: null, engagement_seconds: null, avg_engagement_seconds_per_view: null });
-    expect(pageViews?.previous_coverage).toMatchObject({ days: 4, available_days: 0, missing_days: 4 });
+    expect(pageViews?.previous_coverage).toMatchObject({ days: 4, available_days: 0, missing_days: 4, pending_days: 0 });
     expect(pageViews?.pages.map((row) => [row.page_path, row.previous_views])).toEqual([["/a", null]]);
   });
 
@@ -429,7 +431,7 @@ describe("GET /api/v1/sites/:id/insights page_views", () => {
     expect(JSON.stringify(body.page_views)).not.toMatch(/user/i);
   });
 
-  it("does not change the keys of search and sessions", async () => {
+  it("keeps the keys of search and sessions, with pending_days added to the coverage", async () => {
     const site = await createSite({ url: "https://example.com", gscProperty: GSC, ga4PropertyId: GA4 });
     await insertSearch(site.id, [["2026-01-04", "https://example.com/a", 1, 10, 4]]);
     await insertSessions(site.id, "2026-01-04", "/a", "Organic Search", 6, 3);
@@ -441,13 +443,13 @@ describe("GET /api/v1/sites/:id/insights page_views", () => {
       ["coverage", "daily", "pages", "previous_totals", "property", "queries", "time_zone", "totals"].sort(),
     );
     expect(Object.keys(body.search?.coverage ?? {}).sort()).toEqual(
-      ["available_days", "days", "missing_days", "provisional_days", "time_zone", "truncated_days"].sort(),
+      ["available_days", "days", "missing_days", "pending_days", "provisional_days", "time_zone", "truncated_days"].sort(),
     );
     expect(Object.keys(body.sessions ?? {}).sort()).toEqual(
       ["channels", "coverage", "daily", "landing_pages", "previous_totals", "property", "totals"].sort(),
     );
     expect(Object.keys(body.sessions?.coverage ?? {}).sort()).toEqual(
-      ["available_days", "days", "missing_days", "provisional_days", "time_zone", "truncated_days"].sort(),
+      ["available_days", "days", "missing_days", "pending_days", "provisional_days", "time_zone", "truncated_days"].sort(),
     );
     expect(Object.keys(body.sessions?.daily[0] ?? {}).sort()).toEqual(["date", "engaged_sessions", "key_events", "sessions"]);
   });

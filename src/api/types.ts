@@ -281,7 +281,10 @@ export type InsightsCoverage = {
   days: number;
   available_days: number;
   provisional_days: number;
+  // The days not imported (pending ones included).
   missing_days: number;
+  // The missing days whose import is queued or running.
+  pending_days: number;
   truncated_days: number;
   time_zone: string | null;
 };

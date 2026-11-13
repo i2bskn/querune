@@ -129,6 +129,7 @@ function coverageOf(raw: ReturnType<ReturnType<typeof coverageStatement>["read"]
     available_days: raw.available_days,
     provisional_days: raw.provisional_days,
     missing_days: raw.days - raw.available_days,
+    pending_days: raw.pending_days,
     truncated_days: raw.truncated_days,
     time_zone: raw.time_zone,
   };
@@ -167,7 +168,7 @@ export async function getInsights(d1: D1Database, site: SiteRow, input: Insights
       previous_totals: searchTotals({}),
       pages: [],
       queries: [],
-      coverage: { days: 0, available_days: 0, provisional_days: 0, missing_days: 0, truncated_days: 0, time_zone: null },
+      coverage: { days: 0, available_days: 0, provisional_days: 0, missing_days: 0, pending_days: 0, truncated_days: 0, time_zone: null },
     };
     search = result;
     push(
@@ -253,7 +254,7 @@ export async function getInsights(d1: D1Database, site: SiteRow, input: Insights
       previous_totals: sessionTotals({}),
       channels: [],
       landing_pages: [],
-      coverage: { days: 0, available_days: 0, provisional_days: 0, missing_days: 0, truncated_days: 0, time_zone: null },
+      coverage: { days: 0, available_days: 0, provisional_days: 0, missing_days: 0, pending_days: 0, truncated_days: 0, time_zone: null },
     };
     sessions = result;
     const pageFilter = landingPage === null ? [] : [{ sql: "landing_page = ?", values: [landingPage] }];
@@ -332,6 +333,7 @@ export async function getInsights(d1: D1Database, site: SiteRow, input: Insights
       available_days: 0,
       provisional_days: 0,
       missing_days: 0,
+      pending_days: 0,
       truncated_days: 0,
       time_zone: null,
       thresholded_days: 0,

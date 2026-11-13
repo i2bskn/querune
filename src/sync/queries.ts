@@ -132,6 +132,8 @@ export type Coverage = {
   provisional_days: number;
   truncated_days: number;
   refreshing_days: number;
+  // The days not imported yet whose import is queued or running: a part of the missing days.
+  pending_days: number;
   missing_dates: string[];
   missing_dates_truncated: boolean;
   // The available days with provisional data, ascending, up to 31.
@@ -188,6 +190,9 @@ export function coverageStatement(
     const availableDates = new Set(available.map((row) => row.date));
     const dates = datesBetween(period.start, period.end);
     const missing = dates.filter((date) => !availableDates.has(date));
+    const pendingDates = new Set(
+      rows.filter((row) => row.last_succeeded_at === null && (row.status === "queued" || row.status === "running")).map((row) => row.date),
+    );
     const provisional = available
       .filter((row) => row.last_data_state === "provisional")
       .map((row) => row.date)
@@ -201,6 +206,7 @@ export function coverageStatement(
       provisional_days: provisional.length,
       truncated_days: available.filter((row) => row.last_truncated === 1).length,
       refreshing_days: available.filter((row) => row.status === "queued" || row.status === "running").length,
+      pending_days: missing.filter((date) => pendingDates.has(date)).length,
       missing_dates: missing.slice(0, MISSING_DATES_LIMIT),
       missing_dates_truncated: missing.length > MISSING_DATES_LIMIT,
       provisional_dates: provisional.slice(0, PROVISIONAL_DATES_LIMIT),

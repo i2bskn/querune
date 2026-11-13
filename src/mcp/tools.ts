@@ -41,10 +41,15 @@ const compareDateMessage = "group_by が date のときは比較できません"
 const MAX_DAYS = 400;
 const MAX_QUERY_DAYS = 100;
 const truncatedNote = "行数の上限で一部だけを取り込んだ日があります。";
+const pendingNote = "取得待ちか取り込み中の日（coverage の pending_days）があります。取り込みが終わると値が変わります。";
 const provisionalNote = "速報値の日（provisional_dates）は今後変わることがあります。";
 const ga4EstimateNote = "GA4 の確定は API で判定できないため、経過日数による推定です。";
 const thresholdedNote =
   "GA4 のしきい値か (other) 行への集約の対象になった日（coverage の thresholded_days）は、一部のページの行が含まれていない可能性があります。";
+
+function hasPending(coverage: { current: Coverage; previous: Coverage | null }): boolean {
+  return coverage.current.pending_days > 0 || (coverage.previous?.pending_days ?? 0) > 0;
+}
 
 function hasProvisional(coverage: { current: Coverage; previous: Coverage | null }): boolean {
   return coverage.current.provisional_days > 0 || (coverage.previous?.provisional_days ?? 0) > 0;
@@ -356,6 +361,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         if (byQuery) notes.push("クエリ別の値には匿名化されたクエリが含まれないため、ページ別の合計と一致しません。");
         if (hasProvisional(coverage)) notes.push(provisionalNote);
         if (coverage.current.truncated_days > 0 || (coverage.previous?.truncated_days ?? 0) > 0) notes.push(truncatedNote);
+        if (hasPending(coverage)) notes.push(pendingNote);
         return ok({
           site_id: site.id,
           group_by: args.group_by,
@@ -440,6 +446,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         ];
         if (hasProvisional(coverage)) notes.push(provisionalNote);
         if (coverage.current.truncated_days > 0 || (coverage.previous?.truncated_days ?? 0) > 0) notes.push(truncatedNote);
+        if (hasPending(coverage)) notes.push(pendingNote);
         return ok({
           site_id: site.id,
           group_by: args.group_by,
@@ -534,6 +541,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         ];
         if (hasProvisional(coverage)) notes.push(provisionalNote);
         if (coverage.current.truncated_days > 0 || (coverage.previous?.truncated_days ?? 0) > 0) notes.push(truncatedNote);
+        if (hasPending(coverage)) notes.push(pendingNote);
         if ((coverage.current.thresholded_days ?? 0) > 0 || (coverage.previous?.thresholded_days ?? 0) > 0) {
           notes.push(thresholdedNote);
         }
