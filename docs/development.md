@@ -91,3 +91,9 @@ Deploy to CloudflareボタンもWorkers Buildsも、デプロイには`pnpm run 
 Deploy to Cloudflareボタンは、`.dev.vars.example`でコメントアウトしていないキーをシークレットとして入力させます。`JWT_SECRET`以外はコメントアウトしておきます（`GOOGLE_SERVICE_ACCOUNT_KEY`は任意なので、デプロイ後に設定します）。
 
 キューは、`wrangler.jsonc`にproducerのバインディングがあれば`wrangler deploy`が作ります。consumerだけのキューは作られないため、DLQにもコードでは使わないproducerのバインディング（`SYNC_DLQ`）を置いています。
+
+### カスタムドメインとworkers.dev
+
+`wrangler.jsonc`に`workers_dev`を書いていないため、`wrangler deploy`はルートやカスタムドメインの指定がなければworkers.devのURLを有効にします。ダッシュボードで無効にしても、次のデプロイで有効に戻ります。`workers_dev: false`を書くと、カスタムドメインを持たない利用者（Deploy to Cloudflareボタンでの初回デプロイを含む）がアクセスできるURLがなくなるため、設定ファイルには書きません。
+
+カスタムドメインで使う場合は、Workers Buildsのビルド変数`CUSTOM_DOMAINS`にホスト名を指定します（複数ならカンマかスペースで区切ります）。スクリプトはそれを`wrangler deploy --domains`に渡し、wranglerはカスタムドメインを割り当ててworkers.devのURLを無効にします。wranglerはWorkerのカスタムドメインを指定したものだけに置き換えるため、ダッシュボードで追加したものも含めてすべて指定してください。

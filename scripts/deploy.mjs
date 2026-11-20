@@ -15,6 +15,13 @@
 // in that location first, and `wrangler deploy` then connects to them by name. The location of an existing database
 // cannot be changed, so existing ones are left as they are.
 //
+// When the CUSTOM_DOMAINS environment variable is set (a Workers Builds build variable; comma or space separated host
+// names), they are passed to `wrangler deploy` as --domains. Wrangler then attaches them as Custom Domains and, since
+// `workers_dev` is not in the Wrangler configuration, disables the workers.dev URL, which it otherwise re-enables on
+// every deploy. The configuration cannot set `workers_dev` itself, because a deploy without a custom domain (e.g. the
+// first one from the Deploy to Cloudflare button) needs workers.dev to be reachable at all. Wrangler replaces the
+// Worker's Custom Domains with the listed ones, so every Custom Domain of the Worker must be listed.
+//
 // The bindings are read from the Wrangler configuration (top level only, not `env.*`), so this script does not
 // depend on the names used by this project.
 import { spawnSync } from "node:child_process";
@@ -61,6 +68,11 @@ if (location !== undefined && !LOCATIONS.includes(location)) {
   console.error(`Invalid LOCATION_HINT "${process.env.LOCATION_HINT}": expected one of ${LOCATIONS.join(", ")}.`);
   process.exit(1);
 }
+
+const domains = (process.env.CUSTOM_DOMAINS ?? "")
+  .split(/[\s,]+/)
+  .map((domain) => domain.trim().toLowerCase())
+  .filter((domain) => domain !== "");
 
 const config = unstable_readConfig({});
 const configDir = config.configPath ? path.dirname(config.configPath) : process.cwd();
@@ -130,8 +142,13 @@ function migrate() {
 }
 
 function deploy() {
-  console.log("Deploying the Worker.");
-  run(["deploy"]);
+  if (domains.length === 0) {
+    console.log("Deploying the Worker. CUSTOM_DOMAINS is not set: the workers.dev URL stays enabled.");
+    run(["deploy"]);
+  } else {
+    console.log(`Deploying the Worker to ${domains.join(", ")}. The workers.dev URL is disabled.`);
+    run(["deploy", ...domains.flatMap((domain) => ["--domains", domain])]);
+  }
 }
 
 const missing = migrated.filter((db) => !databaseExists.get(db.binding));
