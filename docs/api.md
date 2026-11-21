@@ -11,6 +11,8 @@
 | `GET /auth/login` | ログイン画面 |
 | `POST /auth/login` | パスワードでログインする（`AUTH_MODE=password`） |
 | `GET /auth/setup`、`POST /auth/setup` | 初期設定。ユーザーがいないときだけ使え、登録した人がadminになる（`AUTH_MODE=password`） |
+| `GET /auth/mfa/manage` | 多要素認証の設定画面。パスワードで確認してから、認証方法の登録・入れ替え・解除に進む（`AUTH_MODE=password`） |
+| `/auth/mfa`以下のその他 | パスワードの後の多要素認証の確認と登録の画面（`AUTH_MODE=password`、[設定](settings.md#多要素認証auth_modepassword)） |
 | `GET /auth/oidc/callback` | OIDCのコールバック（`AUTH_MODE=oidc`） |
 | `POST /auth/refresh` | セッションの更新 |
 | `POST /auth/logout` | ログアウト |

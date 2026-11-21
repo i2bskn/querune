@@ -1,8 +1,9 @@
 import { sql } from "drizzle-orm";
 import { check, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
-// The tables of login and sessions, from @i2bskn/workers-app-core. Re-exported so that drizzle-kit includes them.
-export { users, sessions, type UserRow, type SessionRow } from "@i2bskn/workers-app-core/schema";
+// The tables of login, sessions and password MFA, from @i2bskn/workers-app-core. Re-exported so that drizzle-kit
+// includes them.
+export * from "@i2bskn/workers-app-core/schema";
 
 // The sites shown to every user. No column refers to a user, so deleting a user leaves the sites in place.
 // articles, memos and sitemap_urls refer to this table with ON DELETE CASCADE. A migration that rebuilds this table (copy, DROP

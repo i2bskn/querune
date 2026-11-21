@@ -12,8 +12,19 @@ JWT_SECRET=
 # "password" (default) or "oidc"
 # AUTH_MODE=password
 
-# Required only when AUTH_MODE=oidc.
+# Required when AUTH_MODE=oidc. With AUTH_MODE=password, setting it enables passkeys for MFA.
+# Passkeys need an HTTPS origin, so they do not work on http://localhost.
 # APP_ORIGIN=https://querune.example.com
+
+# Optional for AUTH_MODE=password (docs/settings.md). Which users must use MFA: "optional" (default), "admins"
+# or "all". "admins" and "all" need APP_ORIGIN or PASSWORD_MFA_KEY.
+# PASSWORD_MFA_POLICY=optional
+
+# Optional for AUTH_MODE=password. Enables authenticator apps (TOTP) for MFA. 32 random bytes in standard base64;
+# generate one with `openssl rand -base64 32`. Changing it makes the registered authenticator apps unusable.
+# PASSWORD_MFA_KEY=
+
+# Required only when AUTH_MODE=oidc.
 # OIDC_ISSUER=https://idp.example.com
 # OIDC_CLIENT_ID=querune
 # OIDC_CLIENT_SECRET=dummy-secret

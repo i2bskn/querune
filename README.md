@@ -39,7 +39,7 @@ Queruneは、SEOを長く続けるための調査・記録・振り返りの手�
 
 ## ドキュメント
 
-- [設定](docs/settings.md): 環境変数、ログイン方式とOIDC、Search ConsoleとGA4の接続
+- [設定](docs/settings.md): 環境変数、ログイン方式とOIDC、多要素認証、Search ConsoleとGA4の接続
 - [開発](docs/development.md): 技術スタック、ローカルで開発する、デプロイの仕組み
 - [APIリファレンス](docs/api.md): ログイン、ユーザー管理、サイト、データの取り込み、記事とメモ、MCP（OAuth・ツール）、データの扱い
 

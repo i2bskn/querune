@@ -1,5 +1,6 @@
 /*
-  The screens served by the Worker: login, setup, logout, MCP consent and errors (@i2bskn/workers-app-core).
+  The screens served by the Worker: login, setup, logout, password MFA, MCP consent and errors
+  (@i2bskn/workers-app-core).
   The tokens are the same as in client/src/styles.css; keep them in sync.
 */
 
@@ -9,6 +10,7 @@
   --font-sans: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", system-ui, -apple-system,
     "Segoe UI", "Meiryo", sans-serif;
   --font-serif: var(--font-sans);
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 
   --bg: #f5f4f0;
   --surface: #fdfcfa;
@@ -231,10 +233,119 @@ button.primary:hover {
   border-color: var(--accent-strong);
 }
 
-/* The only button of a form fills its width. */
-form > button:only-of-type {
+/* The buttons of a form fill its width and stack (the MFA settings and recovery forms have several). */
+form > button {
   width: 100%;
   margin-top: 0.5rem;
+}
+
+form > button + button {
+  margin-top: 0.625rem;
+}
+
+/* The status of a passkey check, filled by /auth/mfa/browser.js. */
+form > p[role="status"] {
+  margin: 0.625rem 0 0;
+  font-size: 0.875rem;
+  color: var(--ink-2);
+  text-align: center;
+}
+
+form > p[role="status"]:empty {
+  display: none;
+}
+
+/* The ways to sign in or enroll on the MFA screens (passkey, authenticator app, recovery code), one per section. */
+.card form + form,
+.card form + details,
+.card script + form,
+.card script + details {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--line);
+}
+
+/* The link to the MFA settings under the login form. */
+.card form + p {
+  margin: 1.25rem 0 0;
+  font-size: 0.875rem;
+  text-align: center;
+}
+
+details > summary {
+  width: fit-content;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--link);
+  cursor: pointer;
+  border-radius: 0.25rem;
+}
+
+details[open] > summary {
+  margin-bottom: 1rem;
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+}
+
+/* The QR code to enroll an authenticator app. The SVG has its own white background and quiet zone. */
+.card form > img {
+  display: block;
+  width: min(100%, 232px);
+  height: auto;
+  margin: 0 auto 1rem;
+  border-radius: var(--radius);
+}
+
+/* The setup key next to the QR code. */
+.card form > p > code {
+  display: block;
+  margin-top: 0.25rem;
+  padding: 0.5rem 0.75rem;
+  /* Small enough on phones to keep the 32 characters on one line. */
+  font-size: min(0.875rem, 3.2vw);
+  letter-spacing: 0.02em;
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  user-select: all;
+}
+
+/* The recovery codes, shown once. */
+.card > ul:not([role]) {
+  display: grid;
+  gap: 0.375rem;
+  margin: 0 0 1.5rem;
+  padding: 1rem;
+  list-style: none;
+  background: var(--surface-2);
+  border-radius: var(--radius);
+}
+
+/* Small enough on phones to keep each code (29 characters) on one line. */
+.card > ul:not([role]) code {
+  font-size: min(0.9375rem, 3.4vw);
+  letter-spacing: 0.02em;
+  user-select: all;
+}
+
+/* The link to continue after the recovery codes. */
+.card > a {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 2.875rem;
+  font-weight: 600;
+  color: var(--on-accent);
+  text-decoration: none;
+  background: var(--accent);
+  border-radius: var(--radius);
+}
+
+.card > a:hover {
+  background: var(--accent-strong);
 }
 
 .buttons {
