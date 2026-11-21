@@ -16,6 +16,7 @@ Queruneの環境変数、ログイン方式、多要素認証、Search Console�
 | `OIDC_CLIENT_SECRET` | `oidc`で必須 | IdPに登録したクライアントのシークレット |
 | `INITIAL_ADMIN_EMAIL` | `oidc`で最初の1人に必須 | 最初のadminのメールアドレス。ユーザーが0人のときだけ、このメールアドレスでログインした人をadminにします。下記を参照 |
 | `OIDC_REQUIRE_EMAIL_VERIFIED` | 任意 | `false`にすると、IdPが`email_verified`を送らない場合もログインを許可します。下記を参照 |
+| `OIDC_REQUIRE_GOOGLE_HD` | 任意 | `true`にすると、初めてのログインでGoogleの`hd`を確かめます。Gmailは対象外です。IdPのログイン方法がGoogleだけの場合に使います。下記を参照 |
 | `PASSWORD_MFA_POLICY` | 任意 | 多要素認証を必須にする範囲。`optional`（既定）・`admins`・`all`のどれか（`AUTH_MODE=password`）。下記を参照 |
 | `PASSWORD_MFA_KEY` | 任意 | 認証アプリ（TOTP）の秘密を暗号化する鍵。設定すると認証アプリで多要素認証できます（`AUTH_MODE=password`）。下記を参照 |
 | `SESSION_MAX_AGE_HOURS` | 任意 | ログインからセッションが切れるまでの時間。既定は`password`で`720`（30日）、`oidc`で`24`です。下記を参照 |
@@ -47,6 +48,18 @@ IdPのアカウントでログインします。ログインできるのは、ad
 - ログインさせたくない人は削除します。削除するとセッションとMCPの接続も切れます。もう一度使えるようにするには、ユーザーを追加し直します。
 - `OIDC_REQUIRE_EMAIL_VERIFIED=false`は、IdPが`email_verified`を送らず、かつIdPのすべてのログイン方法がメールアドレスを確認している場合にだけ設定してください。未確認のメールアドレスでログインできる方法があると、追加済みでまだログインしていない人や`INITIAL_ADMIN_EMAIL`になりすまして結び付けられるためです。`email_verified`が送られた場合は、この設定に関係なく`true`である必要があります。`OIDC_ISSUER`を変えたときは、この設定も見直してください。
 - IdPには、リダイレクトURIとして`<APP_ORIGIN>/auth/oidc/callback`を登録します。
+
+#### Googleの`hd`の確認（`OIDC_REQUIRE_GOOGLE_HD`）
+
+IdPのログイン方法がGoogleだけの場合（Cloudflare Access for SaaSでGoogleだけを選んだ場合など）に、`OIDC_REQUIRE_GOOGLE_HD`を`true`にします。Googleがメールアドレスの今の持ち主を保証できるのは、Gmailと、IDトークンに`hd`が入るGoogle Workspaceのアカウントだけです。会社のメールアドレスで作った個人のGoogleアカウントには`hd`がありません。
+
+- 有効にすると、`@gmail.com`以外のメールアドレスでは、IDトークンの`hd`が空でない文字列のときだけログインを許可します。`hd`の値は確かめないので、協力先のWorkspaceのアカウントもログインできます。
+- 確かめるのは、追加した人の初めてのログインと、`INITIAL_ADMIN_EMAIL`で最初のadminを作るときです。条件を満たさないと、ユーザーと結び付けず、「このアカウントではログインできません」と表示します。
+- すでにIdPのアカウントと結び付いた人は確かめ直しません。有効にする前に結び付いた人もログインし続けられます。まだログインしていない人は、有効にした後の初めてのログインで確かめます。
+- IdPがIDトークンに`hd`を入れることを先に確かめてください。Cloudflare Accessでは、アプリのOIDCクレームに`hd`を追加する必要がある場合があります。`hd`が届かないと、Gmail以外の人は初めてのログインができません。
+- `INITIAL_ADMIN_EMAIL`が`hd`のないアカウント（Gmailでも、Workspaceでもないもの）だと、最初のadminを作れません。その場合は無効にしてadminを作ってから、有効にします。
+- IdPは確かめません。Google以外のログイン方法があるIdPで有効にすると、Gmail以外の人がログインできないか、確認の意味がなくなります。
+- 値は`true`か`false`（既定）です。それ以外の値では、初めてのログインと最初のadminの作成だけが500になり、ほかの機能は動き続けます。ログに`invalid configuration: OIDC_REQUIRE_GOOGLE_HD`が出ます。
 
 #### `ALLOWED_EMAILS`を使っていた場合の更新
 

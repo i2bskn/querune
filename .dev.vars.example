@@ -41,6 +41,11 @@ JWT_SECRET=
 # When the claim is present it must still be true. Review this setting whenever OIDC_ISSUER changes.
 # OIDC_REQUIRE_EMAIL_VERIFIED=false
 
+# Optional for AUTH_MODE=oidc. Set to "true" only when every login method of the IdP is Google (docs/settings.md).
+# At the first sign-in, emails other than @gmail.com then need a non-empty hd claim (a Google Workspace account).
+# Make sure the IdP sends hd first: without it, nobody but Gmail users can sign in for the first time.
+# OIDC_REQUIRE_GOOGLE_HD=true
+
 # Optional. The JSON of a Google service account key, on one line, for importing Search Console and GA4
 # (docs/settings.md). Commented out so that the Deploy to Cloudflare button does not ask for it.
 # GOOGLE_SERVICE_ACCOUNT_KEY={"type":"service_account","client_email":"querune@project.iam.gserviceaccount.com","private_key":"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"}

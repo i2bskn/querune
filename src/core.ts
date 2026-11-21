@@ -1,5 +1,6 @@
 import type { Context, Next } from "hono";
 import { createCore } from "@i2bskn/workers-app-core";
+import { requireGoogleHostedDomain } from "./auth/google-hd";
 import { BRAND_NAME, BRAND_TAGLINE } from "./brand";
 import type { AppEnv, Bindings } from "./env";
 import { registerTools } from "./mcp/tools";
@@ -15,6 +16,10 @@ export const core = createCore<Bindings>({
     // Keep this in line with the tools of src/mcp/tools.ts and src/mcp/record-tools.ts.
     description:
       "許可すると、このアプリはあなたとして、このQueruneに登録されたサイトの一覧と、取り込んだ Search Console・GA4 の集計と取り込みの状況を読み取れるようになります。また、サイトの記事とメモを読み取り、登録・編集できるようになります。このアプリから削除はできません。",
+  },
+  hooks: {
+    // OIDC_REQUIRE_GOOGLE_HD (src/auth/google-hd.ts).
+    beforeOidcUserLinkOrCreate: requireGoogleHostedDomain,
   },
 });
 
