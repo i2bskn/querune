@@ -34,16 +34,18 @@ JWT_SECRET=
 # admin adds them on the users screen.
 # INITIAL_ADMIN_EMAIL=admin@example.com
 
-# Optional for AUTH_MODE=oidc. Set to "false" only when the IdP does not send email_verified and every
-# login method of the IdP verifies emails (e.g. Cloudflare Access for SaaS with Google as the only login method).
-# Invited users are linked to the IdP account by email at their first sign-in, so an unverified login method could
-# impersonate an invited user who has not signed in yet, or INITIAL_ADMIN_EMAIL.
+# Optional for AUTH_MODE=oidc. Set to "false" only when the IdP cannot send email_verified and every
+# login method of the IdP verifies emails. Prefer making the IdP send it: with Cloudflare Access for SaaS and Google,
+# add an OIDC claim email_verified from the IdP claim verified_email (docs/settings.md). Invited users are linked to
+# the IdP account by email at their first sign-in, so an unverified login method could impersonate an invited user
+# who has not signed in yet, or INITIAL_ADMIN_EMAIL.
 # When the claim is present it must still be true. Review this setting whenever OIDC_ISSUER changes.
 # OIDC_REQUIRE_EMAIL_VERIFIED=false
 
 # Optional for AUTH_MODE=oidc. Set to "true" only when every login method of the IdP is Google (docs/settings.md).
 # At the first sign-in, emails other than @gmail.com then need a non-empty hd claim (a Google Workspace account).
-# Make sure the IdP sends hd first: without it, nobody but Gmail users can sign in for the first time.
+# Make sure the IdP sends hd first: without it, nobody but Gmail users can sign in for the first time. With
+# Cloudflare Access for SaaS, add an OIDC claim hd from the IdP claim hd, not required (docs/settings.md).
 # OIDC_REQUIRE_GOOGLE_HD=true
 
 # Optional. The JSON of a Google service account key, on one line, for importing Search Console and GA4
