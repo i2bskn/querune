@@ -16,6 +16,8 @@ Queruneの環境変数、ログイン方式、Search ConsoleとGA4の接続を�
 | `OIDC_CLIENT_SECRET` | `oidc`で必須 | IdPに登録したクライアントのシークレット |
 | `ALLOWED_EMAILS` | `oidc`で実質必須 | ログインを許可するメールアドレス。下記を参照 |
 | `OIDC_REQUIRE_EMAIL_VERIFIED` | 任意 | `false`にすると、IdPが`email_verified`を送らない場合もログインを許可します。下記を参照 |
+| `SESSION_MAX_AGE_HOURS` | 任意 | ログインからセッションが切れるまでの時間。既定は`password`で`720`（30日）、`oidc`で`24`です。下記を参照 |
+| `SESSION_IDLE_TIMEOUT_HOURS` | 任意 | 最後のアクセスからセッションが切れるまでの時間。既定はなしです。下記を参照 |
 | `GOOGLE_SERVICE_ACCOUNT_KEY` | 任意 | Search ConsoleとGA4の取り込みに必要。Googleのサービスアカウントの鍵（JSON）をそのまま設定します。下記を参照 |
 
 ## ログイン方式
@@ -31,6 +33,17 @@ IdPのアカウントでログインします。初めてログインした人�
 - `ALLOWED_EMAILS`が空なら、誰もログインできません。`*`はすべての人を許可します（IdP側でログインできる人を絞っている場合に使います）。それ以外は、カンマ区切りのメールアドレス（完全一致）かドメイン（完全一致。サブドメインは一致しません）です。
 - `OIDC_REQUIRE_EMAIL_VERIFIED=false`は、IdPが`email_verified`を送らず、かつIdPのすべてのログイン方法がメールアドレスを確認している場合にだけ設定してください。未確認のメールアドレスでログインできると、同じメールアドレスの既存アカウントを乗っ取れるためです。`email_verified`が送られた場合は、この設定に関係なく`true`である必要があります。`OIDC_ISSUER`を変えたときは、この設定も見直してください。
 - IdPには、リダイレクトURIとして`<APP_ORIGIN>/auth/oidc/callback`を登録します。
+
+### セッションの長さ
+
+ログインのセッションの長さは`SESSION_MAX_AGE_HOURS`と`SESSION_IDLE_TIMEOUT_HOURS`で変えられます。どちらも時間単位の1〜9600の整数で、`"168"`のように文字列で設定します。それ以外の値を設定すると、すべてのリクエストが500になります。
+
+- `SESSION_MAX_AGE_HOURS`はログインした時点から数えます。アクセスを続けても延長されません。変更は次のログインから反映されます。
+- `SESSION_IDLE_TIMEOUT_HOURS`を設定すると、アクセスがないままその時間が経ったセッションも切れます。アクセスするたびに`SESSION_MAX_AGE_HOURS`の範囲で延長されます。変更は既存のセッションにもすぐ反映されます。
+- 延長されるのは、アクセストークン（15分）が切れた後のアクセスです。そのため実際に許される無操作の時間は、`SESSION_IDLE_TIMEOUT_HOURS`より最大15分短くなります。
+- MCPのトークンには影響しません。
+
+たとえば「7日以内にアクセスすれば延長し、最長30日でログインし直す」なら、`SESSION_IDLE_TIMEOUT_HOURS`を`168`、`SESSION_MAX_AGE_HOURS`を`720`にします。
 
 ## ロール
 
