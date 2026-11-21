@@ -50,6 +50,13 @@
       "when": 1795272155806,
       "tag": "0006_cloudy_sasquatch",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1795279320970,
+      "tag": "0007_flat_raider",
+      "breakpoints": true
     }
   ]
 }

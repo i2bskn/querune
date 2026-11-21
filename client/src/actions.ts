@@ -4,9 +4,11 @@ import type {
   CreateMemoRequest,
   CreateSiteRequest,
   CreateUserRequest,
+  CreateUserResponse,
   ImportArticleResult,
   ImportArticlesRequest,
   ImportArticlesResponse,
+  Invitation,
   Memo,
   ReadSitemapRequest,
   ReadSitemapResponse,
@@ -58,20 +60,25 @@ async function resourceActionResult<R extends { ok: boolean; status: number; jso
   return { kind: "error", message: await responseErrorMessage(res) };
 }
 
-export type CreateUserResult = { kind: "ok"; user: User } | SendFailure;
+// invitation is the link for the user to set their password, returned only once: set when a user is created without
+// a password in password mode, null otherwise.
+export type CreateUserResult = { kind: "ok"; user: User; invitation: Invitation | null } | SendFailure;
 
-// Creates a user with a password (password mode only). Admins only. Errors, including email_taken (409) and
-// the 404 of OIDC mode, are shown with the server's message. Never rejects.
+// Creates a user. Admins only. Without a password, password mode returns an invitation link and OIDC mode lets the
+// user sign in with the IdP. Errors, including email_taken (409), are shown with the server's message. Never rejects.
 export async function createUser(client: ApiClient, input: CreateUserRequest): Promise<CreateUserResult> {
   const sent = await send(() => client.api.v1.users.$post({ json: input }));
   if (sent.kind !== "response") return sent;
   const { res } = sent;
   if (res.ok) {
+    let body: CreateUserResponse;
     try {
-      return { kind: "ok", user: await res.json() };
+      body = await res.json();
     } catch {
       return { kind: "error", message: unexpectedResponseMessage(res.status) };
     }
+    const { invitation, ...user } = body;
+    return { kind: "ok", user, invitation: invitation ?? null };
   }
   return { kind: "error", message: await responseErrorMessage(res) };
 }
@@ -81,7 +88,7 @@ export async function createUser(client: ApiClient, input: CreateUserRequest): P
 export type UserActionResult = ResourceActionResult;
 
 // hc() puts params into the URL without encoding them, so an invalid ID is not sent.
-const INVALID_USER_ID: UserActionResult = { kind: "error", message: "ユーザーが見つかりません" };
+const INVALID_USER_ID = { kind: "error", message: "ユーザーが見つかりません" } as const;
 
 // Changes the role of a user. Admins only. Never rejects.
 export async function changeUserRole(client: ApiClient, userId: string, role: User["role"]): Promise<UserActionResult> {
@@ -98,6 +105,34 @@ export async function resetUserPassword(client: ApiClient, userId: string, passw
   if (!isValidId(userId)) return INVALID_USER_ID;
   return resourceActionResult(
     await send(() => client.api.v1.users[":id"].password.$post({ param: { id: userId }, json: { password } })),
+  );
+}
+
+export type InvitationResult = { kind: "ok"; invitation: Invitation } | { kind: "notFound" } | SendFailure;
+
+// Issues a new invitation link for a user who has not set a password yet (password mode only); the previous link
+// stops working. Admins only. notFound means the user is gone; already_active (409) is shown with the server's
+// message. Never rejects.
+export async function reissueUserInvitation(client: ApiClient, userId: string): Promise<InvitationResult> {
+  if (!isValidId(userId)) return INVALID_USER_ID;
+  const sent = await send(() => client.api.v1.users[":id"].invitation.$post({ param: { id: userId } }));
+  if (sent.kind !== "response") return sent;
+  const { res } = sent;
+  if (res.ok) {
+    const body = await okJson(res as { status: number; json(): Promise<Invitation> });
+    return body.kind === "ok" ? { kind: "ok", invitation: body.value } : body;
+  }
+  if (res.status === 404) return { kind: "notFound" };
+  return { kind: "error", message: await responseErrorMessage(res) };
+}
+
+// Deletes the MFA factors, recovery codes and pending MFA steps of another user, and ends their sessions and MCP
+// connections (password mode only). The password stays. Admins only. mfa_not_enrolled (409) and
+// cannot_reset_own_mfa (400) are shown with the server's message. Never rejects.
+export async function resetUserMfa(client: ApiClient, userId: string): Promise<UserActionResult> {
+  if (!isValidId(userId)) return INVALID_USER_ID;
+  return resourceActionResult(
+    await send(() => client.api.v1.users[":id"]["reset-mfa"].$post({ param: { id: userId } })),
   );
 }
 

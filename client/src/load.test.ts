@@ -53,7 +53,7 @@ const unauthorized = apiError(401, "ログインしてください");
 
 describe("loadMe", () => {
   it("returns the signed-in user", async () => {
-    const user: User = { id: "u1", email: "a@example.com", name: null, role: "member", created_at: 1, last_login_at: null };
+    const user: User = { id: "u1", email: "a@example.com", name: null, role: "member", created_at: 1, last_login_at: null, status: "active" };
     const { client } = setup({ "/api/v1/me": [json(200, user)] });
     expect(await loadMe(client)).toEqual({ kind: "ready", data: user });
   });
@@ -72,6 +72,7 @@ describe("loadUsersView", () => {
     role: "admin",
     created_at: 1,
     last_login_at: null,
+    status: "active",
   };
 
   it("shows the users and the auth mode", async () => {

@@ -29,14 +29,15 @@ JWT_SECRET=
 # OIDC_CLIENT_ID=querune
 # OIDC_CLIENT_SECRET=dummy-secret
 
-# Effectively required when AUTH_MODE=oidc. Empty denies every login. "*" allows everyone (when the IdP
-# restricts who can sign in). Otherwise comma separated emails (exact match) or domains (exact match,
-# subdomains do not match).
-# ALLOWED_EMAILS=example.com,alice@example.org
+# For AUTH_MODE=oidc, required to sign in to a deployment without users. While there are no users, the first
+# sign-in with this email creates the first admin; ignored once a user exists. Other users sign in only after an
+# admin adds them on the users screen.
+# INITIAL_ADMIN_EMAIL=admin@example.com
 
 # Optional for AUTH_MODE=oidc. Set to "false" only when the IdP does not send email_verified and every
 # login method of the IdP verifies emails (e.g. Cloudflare Access for SaaS with Google as the only login method).
-# Users are linked to existing accounts by email, so an unverified login method could take over an account.
+# Invited users are linked to the IdP account by email at their first sign-in, so an unverified login method could
+# impersonate an invited user who has not signed in yet, or INITIAL_ADMIN_EMAIL.
 # When the claim is present it must still be true. Review this setting whenever OIDC_ISSUER changes.
 # OIDC_REQUIRE_EMAIL_VERIFIED=false
 

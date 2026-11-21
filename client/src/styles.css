@@ -3455,6 +3455,56 @@ a.tag:hover {
   background: var(--bg);
 }
 
+.user-status {
+  padding: 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-radius: 999px;
+}
+
+.folder-form fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1.25rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.folder-form legend {
+  margin: 0 0 0.25rem;
+  padding: 0;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+.folder-form .check {
+  flex-direction: row;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.invitation-link {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.invitation-link input {
+  flex: 1 1 16rem;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
+
+.folder-form-actions .hint {
+  align-self: center;
+}
+
 .menu {
   position: relative;
 }
