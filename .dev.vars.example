@@ -25,8 +25,10 @@ JWT_SECRET=
 # PASSWORD_MFA_KEY=
 
 # Optional (docs/settings.md). The hash of new passwords: "scrypt" (default) or "pbkdf2". Any other value is a
-# configuration error, whatever AUTH_MODE is. scrypt takes about 150ms of CPU per hash, more than the Workers Free
-# plan allows: on the Free plan set "pbkdf2", and consider fewer iterations (10000 to 100000, default 100000).
+# configuration error, whatever AUTH_MODE is. scrypt takes about 150-200ms of CPU per hash and pbkdf2 at 100000
+# iterations about 17-56ms, both over the 10ms of the Workers Free plan. In a measurement in 2026-11 neither was cut
+# off on the Free plan, but that is not guaranteed: if sign-ins fail on the CPU limit, set "pbkdf2" with fewer
+# iterations (10000 to 100000, default 100000), or use Workers Paid.
 # Existing hashes keep working after a change.
 # PASSWORD_HASH_ALGORITHM=pbkdf2
 # PASSWORD_PBKDF2_ITERATIONS=50000

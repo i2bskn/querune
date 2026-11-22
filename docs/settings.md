@@ -19,7 +19,7 @@ Queruneの環境変数、ログイン方式、多要素認証、Search Console�
 | `OIDC_REQUIRE_GOOGLE_HD` | 任意 | `true`にすると、初めてのログインでGoogleの`hd`を確かめます。Gmailは対象外です。IdPのログイン方法がGoogleだけの場合に使います。下記を参照 |
 | `PASSWORD_MFA_POLICY` | 任意 | 多要素認証を必須にする範囲。`optional`（既定）・`admins`・`all`のどれか（`AUTH_MODE=password`）。下記を参照 |
 | `PASSWORD_MFA_KEY` | 任意 | 認証アプリ（TOTP）の秘密を暗号化する鍵。設定すると認証アプリで多要素認証できます（`AUTH_MODE=password`）。下記を参照 |
-| `PASSWORD_HASH_ALGORITHM` | 任意 | パスワードのハッシュの方式。`scrypt`（既定）か`pbkdf2`。`AUTH_MODE`に関係なく、それ以外の値は設定エラーです。WorkersのFreeプランでは`pbkdf2`にします。下記を参照 |
+| `PASSWORD_HASH_ALGORITHM` | 任意 | パスワードのハッシュの方式。`scrypt`（既定）か`pbkdf2`。`AUTH_MODE`に関係なく、それ以外の値は設定エラーです。下記を参照 |
 | `PASSWORD_PBKDF2_ITERATIONS` | 任意 | `pbkdf2`のときのハッシュの回数。10000〜100000の整数（既定は100000）で、`"50000"`のように文字列で設定します。`scrypt`のときも確かめられ、範囲外は設定エラーです。下記を参照 |
 | `SESSION_MAX_AGE_HOURS` | 任意 | ログインからセッションが切れるまでの時間。既定は`password`で`720`（30日）、`oidc`で`24`です。下記を参照 |
 | `SESSION_IDLE_TIMEOUT_HOURS` | 任意 | 最後のアクセスからセッションが切れるまでの時間。既定はなしです。下記を参照 |
@@ -53,10 +53,11 @@ Queruneの環境変数、ログイン方式、多要素認証、Search Console�
 
 パスワードはハッシュにして保存します。方式は`PASSWORD_HASH_ALGORITHM`で決めます。
 
-- 既定は`scrypt`です。1回のハッシュにCPUを約150ms使うので、WorkersのFreeプラン（CPU時間10ms）には収まりません。Freeプランでは`pbkdf2`にします。
-- `pbkdf2`の回数（`PASSWORD_PBKDF2_ITERATIONS`）の既定は、Workersの上限の100000回です。Freeプランでは100000回でも10msを超えることがあるので、低めの値を検討してください。
+- 既定は`scrypt`です。1回のハッシュにCPUを約150〜200ms使い、WorkersのFreeプランの上限（1回10ms）を超えます。
+- `pbkdf2`の回数（`PASSWORD_PBKDF2_ITERATIONS`）の既定は、Workersの上限の100000回です。100000回でも1回17〜56msかかり、Freeプランの上限を超えます。回数を下げるとCPU時間も減ります。
+- 2026年11月の計測では、Freeプランでもどちらの方式も打ち切られずに動きました（約560msかかった場合も）。ただしCloudflareは保証していません。ログインがCPU時間の上限で失敗する場合は`pbkdf2`にして回数を下げるか、Workers Paidプランを使ってください。
 - 既存のハッシュは作り直しません。保存したときの方式で確かめるので、方式を切り替えても既存のユーザーはログインできます。
-- `scrypt`から`pbkdf2`に戻しても、既存の`scrypt`のハッシュを確かめるには約150msかかります。Freeプランでは、パスワードを設定し直すまでログインできないことがあります。
+- `scrypt`から`pbkdf2`に戻しても、既存の`scrypt`のハッシュを確かめるCPU時間は変わりません。軽くなるのはパスワードを設定し直してからです。
 - 既存のハッシュと設定が違う間は、ログインの応答時間から登録済みのメールアドレスが分かることがあります。既存のユーザーがいる場合は、そのハッシュと同じ設定を保つか、パスワードを設定し直してください。
 - 値が正しくないと設定エラーになります（[設定エラーになったとき](#設定エラーになったとき)）。
 
