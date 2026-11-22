@@ -1,6 +1,16 @@
+import { env as workerEnv } from "cloudflare:workers";
 import { base64UrlEncode } from "@i2bskn/workers-app-core";
 import { beforeEach, describe, expect, it } from "vitest";
-import { ORIGIN, PASSWORD, resetDb, send, sessionCookies, setCookies, type SessionCookies } from "./helpers";
+import {
+  ORIGIN,
+  PASSWORD,
+  resetDb,
+  send,
+  sessionCookies,
+  setCookies,
+  type RequestOptions,
+  type SessionCookies,
+} from "./helpers";
 
 // The login, user management and MCP OAuth of @i2bskn/workers-app-core, as wired into Querune. The package tests
 // cover their behavior in detail.
@@ -8,9 +18,13 @@ import { ORIGIN, PASSWORD, resetDb, send, sessionCookies, setCookies, type Sessi
 const REDIRECT_URI = "https://client.example/cb";
 const MCP_ACCEPT = "application/json, text/event-stream";
 
-async function setup(): Promise<SessionCookies> {
+// The tests hash passwords with PBKDF2 (vitest.config.ts). This env brings back the default of the core, scrypt.
+const DEFAULT_HASH_ENV = { PASSWORD_HASH_ALGORITHM: undefined, PASSWORD_PBKDF2_ITERATIONS: undefined };
+
+async function setup(env?: RequestOptions["env"]): Promise<SessionCookies> {
   const res = await send("/auth/setup", {
     form: { email: "admin@example.com", name: "Admin", password: PASSWORD, password_confirm: PASSWORD },
+    env,
   });
   expect(res.status).toBe(303);
   return sessionCookies(res);
@@ -46,8 +60,9 @@ async function openConsent(cookies: SessionCookies) {
 beforeEach(resetDb);
 
 describe("core", () => {
-  it("creates the first admin, signs in and serves /api/v1/me and /api/v1/users", async () => {
-    const cookies = await setup();
+  it("creates the first admin, signs in and serves /api/v1/me and /api/v1/users with the default password hash", async () => {
+    const env = DEFAULT_HASH_ENV;
+    const cookies = await setup(env);
     expect(Object.keys(cookies).sort()).toEqual(["__Host-querune_at", "__Host-querune_rt"]);
 
     const me = await send("/api/v1/me", { cookies });
@@ -56,6 +71,7 @@ describe("core", () => {
 
     const created = await send("/api/v1/users", {
       cookies,
+      env,
       json: { email: "member@example.com", password: "a long enough password", role: "member" },
     });
     expect(created.status).toBe(201);
@@ -68,10 +84,16 @@ describe("core", () => {
 
     const login = await send("/auth/login", {
       form: { email: "member@example.com", password: "a long enough password", next: "/" },
+      env,
     });
     expect(login.status).toBe(303);
     const member = await send("/api/v1/users", { cookies: sessionCookies(login) });
     expect(member.status).toBe(403);
+
+    const hashes = await workerEnv.DB.prepare("SELECT password_hash FROM users ORDER BY email").all<{
+      password_hash: string;
+    }>();
+    expect(hashes.results.map((row) => row.password_hash.split("$")[0])).toEqual(["scrypt", "scrypt"]);
   });
 
   it("shows what MCP clients can do on the consent page", async () => {

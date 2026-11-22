@@ -24,7 +24,15 @@ JWT_SECRET=
 # generate one with `openssl rand -base64 32`. Changing it makes the registered authenticator apps unusable.
 # PASSWORD_MFA_KEY=
 
-# Required only when AUTH_MODE=oidc.
+# Optional (docs/settings.md). The hash of new passwords: "scrypt" (default) or "pbkdf2". Any other value is a
+# configuration error, whatever AUTH_MODE is. scrypt takes about 150ms of CPU per hash, more than the Workers Free
+# plan allows: on the Free plan set "pbkdf2", and consider fewer iterations (10000 to 100000, default 100000).
+# Existing hashes keep working after a change.
+# PASSWORD_HASH_ALGORITHM=pbkdf2
+# PASSWORD_PBKDF2_ITERATIONS=50000
+
+# Required only when AUTH_MODE=oidc. OIDC_ISSUER is the issuer itself; a URL with /.well-known/ (the discovery URL)
+# is a configuration error.
 # OIDC_ISSUER=https://idp.example.com
 # OIDC_CLIENT_ID=querune
 # OIDC_CLIENT_SECRET=dummy-secret

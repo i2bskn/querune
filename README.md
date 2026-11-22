@@ -25,7 +25,8 @@ Queruneは、SEOを長く続けるための調査・記録・振り返りの手�
    [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/i2bskn/querune)
 
 2. セットアップ画面で`JWT_SECRET`を入力し、D1データベースの場所のヒントに、使う人に近い地域（日本ならAsia-Pacific (APAC)）を選びます。
-3. 表示されたURLを開くと初期設定画面になり、**最初に登録した人がadminになります**。URLを知った他人に先に登録されないように、デプロイしたらすぐ登録してください。
+3. WorkersのFreeプランで使う場合は、初期設定の前にダッシュボードのWorkerの「Settings」→「Variables and Secrets」で、変数`PASSWORD_HASH_ALGORITHM`を`pbkdf2`にします。既定のscryptは1回のハッシュにCPUを約150ms使うので、FreeプランのCPU時間（10ms）に収まりません。回数（`PASSWORD_PBKDF2_ITERATIONS`）を下げることも検討してください。詳しくは[設定](docs/settings.md#パスワードのハッシュpassword_hash_algorithm)を参照してください。
+4. 表示されたURLを開くと初期設定画面になり、**最初に登録した人がadminになります**。URLを知った他人に先に登録されないように、デプロイしたらすぐ登録してください。
 
 設定できる環境変数とログイン方式は[設定](docs/settings.md)を参照してください。
 

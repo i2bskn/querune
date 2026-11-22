@@ -1,7 +1,9 @@
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import type { PasswordHashConfig } from "@i2bskn/workers-app-core";
 import {
   createTestHelpers,
+  type CreateUserParams,
   type RequestOptions as CoreRequestOptions,
   type SessionCookies as CoreSessionCookies,
 } from "@i2bskn/workers-app-core/testing";
@@ -36,12 +38,21 @@ export const {
   setCookies,
   sessionCookies,
   login,
-  createUser,
   dbChangingBefore,
   d1With,
   d1RecordingLargeBinds,
   countTable,
 } = helpers;
+
+// The password hash of the tests, the same as PASSWORD_HASH_ALGORITHM and PASSWORD_PBKDF2_ITERATIONS of
+// vitest.config.ts. The default scrypt takes about 150ms of CPU per hash, which makes the tests several times slower;
+// the tests do not depend on the hash. test/core-smoke.test.ts signs in with scrypt once.
+export const TEST_HASH_CONFIG: PasswordHashConfig = { algorithm: "pbkdf2", iterations: 10000 };
+
+// Inserts a user directly, with TEST_HASH_CONFIG unless hashConfig is given.
+export function createUser(params: CreateUserParams) {
+  return helpers.createUser({ hashConfig: TEST_HASH_CONFIG, ...params });
+}
 
 export type RequestOptions = CoreRequestOptions<Cloudflare.Env>;
 export type SessionCookies = CoreSessionCookies<"querune">;

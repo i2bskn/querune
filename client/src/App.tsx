@@ -17,17 +17,17 @@ import { SettingsView } from "./views/SettingsView";
 import { SiteDetailView } from "./views/SiteDetailView";
 import { UsersView } from "./views/UsersView";
 
-// One client for every screen: the shared refresh and the single move to the login page are per instance.
-const client = createApiClient(
-  createApiFetch({
-    fetch: globalThis.fetch.bind(globalThis),
-    redirectToLogin: (url) => {
-      markLeaving();
-      location.assign(url);
-    },
-    currentPath: () => location.pathname + location.search,
-  }),
-);
+// One fetch for every screen: the shared refresh and the single move to the login page are per instance. The hc()
+// client and the user management functions of @i2bskn/workers-app-core use the same one.
+const apiFetch = createApiFetch({
+  fetch: globalThis.fetch.bind(globalThis),
+  redirectToLogin: (url) => {
+    markLeaving();
+    location.assign(url);
+  },
+  currentPath: () => location.pathname + location.search,
+});
+const client = createApiClient(apiFetch);
 
 export function App() {
   // Loaded once; moving between screens does not load it again. Screens load their data after it.
@@ -77,7 +77,7 @@ function Screen({ route, user, path }: { route: Route; user: User; path: string 
     case "memoDetail":
       return <MemoDetailView client={client} id={route.id} />;
     case "users":
-      return <UsersView client={client} currentUserId={user.id} />;
+      return <UsersView apiFetch={apiFetch} currentUserId={user.id} />;
     case "notFound":
       return <RouteNotFound />;
   }
