@@ -78,7 +78,7 @@ CookieにSecure属性と`__Host-`接頭辞を使うので、`http://localhost`�
 
 ## デプロイの仕組み
 
-Deploy to CloudflareボタンもWorkers Buildsも、デプロイには`pnpm run deploy`（`scripts/deploy.mjs`）を使います。スクリプトは`wrangler.jsonc`のD1の設定を読み、次の順に実行します。
+Deploy to CloudflareボタンもWorkers Buildsも、デプロイには`pnpm run deploy`（[@i2bskn/workers-deploy](https://github.com/i2bskn/workers-deploy)の`workers-deploy`コマンド）を使います。コマンドは`wrangler.jsonc`のD1の設定を読み、次の順に実行します。
 
 1. D1データベースが既にあるかを確かめます。
 2. `LOCATION_HINT`が設定されていれば、まだないD1をその場所に作ります。作れなかった場合は、別の場所に作られないようにデプロイを止めます。
@@ -97,4 +97,4 @@ Deploy to Cloudflareボタンは、`.dev.vars.example`でコメントアウト�
 
 `wrangler.jsonc`に`workers_dev`を書いていないため、`wrangler deploy`はルートやカスタムドメインの指定がなければworkers.devのURLを有効にします。ダッシュボードで無効にしても、次のデプロイで有効に戻ります。`workers_dev: false`を書くと、カスタムドメインを持たない利用者（Deploy to Cloudflareボタンでの初回デプロイを含む）がアクセスできるURLがなくなるため、設定ファイルには書きません。
 
-カスタムドメインで使う場合は、Workers Buildsのビルド変数`CUSTOM_DOMAINS`にホスト名を指定します（複数ならカンマかスペースで区切ります）。スクリプトはそれを`wrangler deploy --domains`に渡し、wranglerはカスタムドメインを割り当ててworkers.devのURLを無効にします。wranglerはWorkerのカスタムドメインを指定したものだけに置き換えるため、ダッシュボードで追加したものも含めてすべて指定してください。
+カスタムドメインで使う場合は、Workers Buildsのビルド変数`CUSTOM_DOMAINS`にホスト名を指定します（複数ならカンマかスペースで区切ります）。ホスト名以外（`https://`付きなど）を指定するとデプロイはエラーで止まります。コマンドはそれを`wrangler deploy --domains`に渡し、wranglerはカスタムドメインを割り当ててworkers.devのURLを無効にします。wranglerはWorkerのカスタムドメインを指定したものだけに置き換えるため、ダッシュボードで追加したものも含めてすべて指定してください。

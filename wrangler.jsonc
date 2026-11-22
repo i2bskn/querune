@@ -15,7 +15,7 @@
   "preview_urls": false,
   "observability": { "enabled": true },
   // The D1 database can end up far from the users: the Deploy to Cloudflare button creates it where its setup page
-  // says (Automatic by default), and without the LOCATION_HINT build variable (see scripts/deploy.mjs) `wrangler deploy`
+  // says (Automatic by default), and without the LOCATION_HINT build variable (see workers-deploy) `wrangler deploy`
   // creates it near whoever runs it (for Workers Builds, the build environment). An API request makes several
   // sequential D1 queries, so Smart Placement runs the Worker near the database instead of near the user.
   // Static assets are still served from the nearest location, since they do not invoke the Worker.
