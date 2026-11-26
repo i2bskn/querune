@@ -7,41 +7,26 @@ Queruneは、SEOを長く続けるための調査・記録・振り返りの手�
 - MCP: OAuthで接続し、実績と記事・メモをAIから読み取れます。記事とメモはAIからも登録・編集できます（削除は管理画面だけ）。集計と指標の計算はサーバーで行い、AIは説明と検討を受け持ちます。
 - 管理画面: 取り込んだ実績の推移・上位のクエリとページ・流入チャネルを、メモを書いた日の印と並べて見られます。メモは本文にMarkdownが使え、タイトルと本文から検索できます。記事・メモ・サイト・ユーザーの管理もここで行います。記事はサイトマップから選んでまとめて登録でき、タイトルと公開日はページから読み取ります。
 
-## サイトとユーザー
+## デプロイする
 
-- 複数のサイトと複数のユーザーを扱えます。ユーザーごとのワークスペースは持たず、全ユーザーが同じサイトの情報を見ます。
-- ユーザーのロールはadminとmemberの2つです。adminだけがユーザー管理（追加、ロールの変更、削除など）を行えます。それ以外の操作に差はありません。
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/i2bskn/querune)
 
-## 必要なもの
+セットアップ画面では`JWT_SECRET`を入力します。`openssl rand -hex 32`で生成した値を使ってください。D1データベースの場所のヒントには、使う人に近い地域（日本ならAsia-Pacific (APAC)）を選びます。
 
-- Cloudflareのアカウントが必要です。
-- Search ConsoleとGA4のデータを取り込む場合は、サービスアカウントを作るためのGoogle Cloudのプロジェクトが必要です。
-- `JWT_SECRET`は`openssl rand -hex 32`で生成した値を使ってください。変更すると全員がログアウトします。
-
-## 試す（Deploy to Cloudflareボタン）
-
-1. 次のボタンを押します。
-
-   [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/i2bskn/querune)
-
-2. セットアップ画面で`JWT_SECRET`を入力し、D1データベースの場所のヒントに、使う人に近い地域（日本ならAsia-Pacific (APAC)）を選びます。
-3. 表示されたURLを開くと初期設定画面になり、**最初に登録した人がadminになります**。URLを知った他人に先に登録されないように、デプロイしたらすぐ登録してください。
-
-設定できる環境変数とログイン方式は[設定](docs/settings.md)を参照してください。
-
-## AIとつなぐ
-
-1. Google Cloudでサービスアカウントを作り、鍵を`GOOGLE_SERVICE_ACCOUNT_KEY`に設定します（[設定](docs/settings.md#search-console-と-ga4-の接続)）。
-2. 管理画面の『すべてのサイト』でサイトを追加し、Search ConsoleのプロパティとGA4のプロパティIDを設定します。
-3. サイトの画面の『データの取り込み』で期間を選んで取り込みます。以降は毎日、直近の日が自動で取り込まれます。
-4. AIからQueruneのMCP（`https://<デプロイ先>/mcp`）に接続し、承認画面でログインして許可します。
-5. AIに「今週のサイトの状況は？」「次は何を書く？」のように話しかけます。AIは実績と前回までのメモを読み取り、振り返りと次の行動を一緒に検討します。
+表示されたURLを開くと初期設定画面になり、**最初に登録した人がadminになります**。URLを知った他人に先に登録されないように、デプロイしたらすぐ登録してください。
 
 ## ドキュメント
 
-- [設定](docs/settings.md): 環境変数、ログイン方式とOIDC、多要素認証、Search ConsoleとGA4の接続
-- [開発](docs/development.md): 技術スタック、ローカルで開発する、デプロイの仕組み
-- [APIリファレンス](docs/api.md): ログイン、ユーザー管理、サイト、データの取り込み、記事とメモ、MCP（OAuth・ツール）、データの扱い
+使い方と設定は https://docs.i2bskn.com/querune/ にまとめています。
+
+- [デプロイする](https://docs.i2bskn.com/querune/getting-started/deploy/)
+- [Search ConsoleとGA4をつなぐ](https://docs.i2bskn.com/querune/getting-started/google/)
+- [AIとつなぐ](https://docs.i2bskn.com/querune/getting-started/ai/)
+- [環境変数](https://docs.i2bskn.com/querune/admin/configuration/)
+- [APIリファレンス](https://docs.i2bskn.com/querune/reference/auth/)
+- [開発環境](https://docs.i2bskn.com/querune/development/local/)
+
+ドキュメントのソースは[`docs/`](docs/)にあります。
 
 ## ライセンス
 

@@ -1,0 +1,53 @@
+---
+// The Querune symbol (client/src/brand.tsx): a Q whose ring looks back at the results and whose tail runs on to the
+// next action. The tail is drawn in the accent.
+const { siteTitleHref } = Astro.locals.starlightRoute;
+---
+
+<a href={siteTitleHref} class="gh-title" translate="no">
+  <svg class="gh-mark" viewBox="0 0 128 128" width="30" height="30" aria-hidden="true">
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path
+        d="M88 82C82 91 71 97 58 97C36 97 20 81 20 59C20 37 37 20 59 20C81 20 98 37 98 59C98 65 97 69 95 73"
+        stroke="currentColor"
+        stroke-width="14"></path>
+      <path d="M54 69C64 65 69 71 76 81L83 90Q91 103 108 99" class="gh-mark-tail" stroke-width="13"></path>
+    </g>
+  </svg>
+  <span class="gh-name">querune<span class="gh-scope"> docs</span></span>
+</a>
+
+<style>
+  .gh-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    min-width: 0;
+    color: var(--sl-color-white);
+    text-decoration: none;
+  }
+  .gh-mark {
+    flex: none;
+    color: var(--sl-color-white);
+  }
+  .gh-mark-tail {
+    stroke: var(--sl-color-accent);
+  }
+  .gh-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--__sl-font-mono);
+    font-size: 0.9375rem;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+  }
+  .gh-scope {
+    color: var(--sl-color-gray-3);
+  }
+  @media (max-width: 30rem) {
+    .gh-scope {
+      display: none;
+    }
+  }
+</style>

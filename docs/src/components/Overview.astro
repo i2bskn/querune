@@ -1,0 +1,401 @@
+---
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+const features = [
+  {
+    title: "毎日、実績を取り込む",
+    body: "Search ConsoleとGA4の集計データを日次で取得し、データの鮮度・欠損・同期状態と一緒に保存します。",
+    href: `${base}/getting-started/google/`,
+    link: "Search ConsoleとGA4をつなぐ",
+  },
+  {
+    title: "考えたことをメモに残す",
+    body: "サイトの記事の台帳と、メモを残します。「前回何を考え、何を変え、次に何をするか」を次の振り返りへ引き継ぐためです。",
+    href: `${base}/reference/articles-memos/`,
+    link: "記事とメモ",
+  },
+  {
+    title: "AIと振り返る",
+    body: "MCPにOAuthで接続し、実績と記事・メモをAIから読み取れます。集計と指標の計算はサーバーで行い、AIは説明と検討を受け持ちます。",
+    href: `${base}/getting-started/ai/`,
+    link: "AIとつなぐ",
+  },
+  {
+    title: "管理画面で見る",
+    body: "取り込んだ実績の推移・上位のクエリとページ・流入チャネルを、メモを書いた日の印と並べて見られます。",
+    href: `${base}/reference/insights/`,
+    link: "実績の集計",
+  },
+];
+
+// The four datasets (API reference: データの扱い).
+const datasets = [
+  { src: "Search Console", key: "gsc_pages", name: "ページ別", grain: "ページ × 日", values: "クリック数・表示回数・平均掲載順位" },
+  { src: "Search Console", key: "gsc_queries", name: "クエリ別", grain: "ページ × クエリ × 日", values: "クリック数・表示回数・平均掲載順位" },
+  {
+    src: "GA4",
+    key: "ga4_landing_pages",
+    name: "ランディングページ別",
+    grain: "ランディングページ × チャネル × 日",
+    values: "セッション数・エンゲージのあったセッション数・キーイベント数",
+  },
+  { src: "GA4", key: "ga4_pages", name: "ページ別", grain: "ホスト名 × パス × 日", values: "表示回数・エンゲージメント時間の合計" },
+];
+
+const next = [
+  { n: "01", title: "デプロイする", href: `${base}/getting-started/deploy/` },
+  { n: "02", title: "Search ConsoleとGA4をつなぐ", href: `${base}/getting-started/google/` },
+  { n: "03", title: "AIとつなぐ", href: `${base}/getting-started/ai/` },
+  { n: "04", title: "環境変数", href: `${base}/admin/configuration/` },
+];
+---
+
+<section class="gh-sec not-content" aria-labelledby="gh-feat-title">
+  <p class="gh-kicker">How it works</p>
+  <h2 id="gh-feat-title">実績とメモを並べて、次の行動を決める。</h2>
+  <ul class="gh-feat">
+    {
+      features.map((f, i) => (
+        <li>
+          <span class="gh-feat-n" aria-hidden="true">
+            {String(i + 1).padStart(2, "0")}
+          </span>
+          <h3>{f.title}</h3>
+          <p set:html={f.body} />
+          <a href={f.href}>{f.link}</a>
+        </li>
+      ))
+    }
+  </ul>
+</section>
+
+<section class="gh-sec not-content" aria-labelledby="gh-sets-title">
+  <p class="gh-kicker">Datasets</p>
+  <h2 id="gh-sets-title">取り込むのは4つの集計</h2>
+  <p class="gh-lead">
+    Search ConsoleとGA4から集計結果を取り込みます。毎日18:00 UTCと6:00 UTC（日本時間では15:00と3:00）に直近の日を取り込み直すので、遅れて確定する値も反映されます。
+  </p>
+  <ul class="gh-sets">
+    {
+      datasets.map((d) => (
+        <li>
+          <span class:list={["gh-set-src", { "gh-set-ga4": d.src === "GA4" }]} translate="no">
+            {d.src}
+          </span>
+          <h3>{d.name}</h3>
+          <code>{d.key}</code>
+          <p class="gh-set-grain">{d.grain}</p>
+          <p class="gh-set-values">{d.values}</p>
+        </li>
+      ))
+    }
+  </ul>
+  <p class="gh-sets-foot">
+    欠損と未取得を0に置き換えず、確定・速報値も日ごとに記録します。指標の計算は<a href={`${base}/reference/data/`}
+      >データの扱い</a
+    >を参照してください。
+  </p>
+</section>
+
+<nav class="gh-sec gh-next not-content" aria-labelledby="gh-next-title">
+  <p class="gh-kicker">Start here</p>
+  <h2 id="gh-next-title">この順で読む</h2>
+  <ol>
+    {
+      next.map((s) => (
+        <li>
+          <a href={s.href}>
+            <span class="gh-next-n">{s.n}</span>
+            <span class="gh-next-t">{s.title}</span>
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+              <path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.5" />
+            </svg>
+          </a>
+        </li>
+      ))
+    }
+  </ol>
+</nav>
+
+<footer class="gh-foot not-content">
+  <span class="gh-foot-name" translate="no">querune</span>
+  <ul>
+    <li><a href="https://docs.i2bskn.com/">ドキュメント一覧</a></li>
+    <li><a href="https://github.com/i2bskn/querune">GitHub</a></li>
+    <li><a href="https://github.com/i2bskn/querune/blob/main/LICENSE">Apache License 2.0</a></li>
+  </ul>
+</footer>
+
+<style>
+  .gh-sec {
+    padding-block: 4rem 1rem;
+    border-top: 1px solid var(--sl-color-hairline);
+  }
+  .gh-kicker {
+    margin: 0 0 0.75rem;
+    font-family: var(--__sl-font-mono);
+    font-size: var(--sl-text-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--gh-accent-text);
+  }
+  h2 {
+    max-width: 36rem;
+    margin: 0;
+    font-size: clamp(1.625rem, 1.25rem + 1.4vw, 2.25rem);
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--sl-color-white);
+    font-feature-settings: "palt";
+    word-break: auto-phrase;
+    text-wrap: balance;
+  }
+  .gh-lead {
+    max-width: 40rem;
+    margin: 1rem 0 0;
+    font-size: var(--sl-text-sm);
+    line-height: 1.8;
+    color: var(--sl-color-gray-2);
+  }
+
+  .gh-feat {
+    display: grid;
+    gap: 1px;
+    margin: 2.5rem 0 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--gh-line);
+    border-radius: var(--gh-radius);
+    background: var(--gh-line);
+    overflow: clip;
+  }
+  @media (min-width: 40rem) {
+    .gh-feat {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  @media (min-width: 72rem) {
+    .gh-feat {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+  .gh-feat li {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding: 1.5rem 1.4rem 1.4rem;
+    background: var(--sl-color-black);
+  }
+  .gh-feat-n {
+    font-family: var(--__sl-font-mono);
+    font-size: var(--sl-text-xs);
+    color: var(--gh-accent-text);
+  }
+  .gh-feat h3 {
+    margin: 0.25rem 0 0;
+    font-size: 1.0625rem;
+    font-weight: 600;
+    line-height: 1.45;
+    color: var(--sl-color-white);
+    font-feature-settings: "palt";
+    word-break: auto-phrase;
+  }
+  .gh-feat p {
+    word-break: auto-phrase;
+    flex: 1;
+    margin: 0;
+    font-size: var(--sl-text-sm);
+    line-height: 1.8;
+    color: var(--sl-color-gray-2);
+  }
+  .gh-feat a {
+    align-self: flex-start;
+    margin-top: 0.5rem;
+    font-size: var(--sl-text-sm);
+    font-weight: 500;
+    color: var(--sl-color-white);
+    text-decoration: underline;
+    text-decoration-color: var(--sl-color-accent);
+    text-underline-offset: 0.25em;
+  }
+  .gh-feat a:hover {
+    color: var(--gh-accent-text);
+  }
+
+  /* ---------- Datasets: what Querune keeps, by source ---------- */
+
+  .gh-sets {
+    display: grid;
+    gap: 0.75rem;
+    margin: 2.5rem 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  @media (min-width: 48rem) {
+    .gh-sets {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1rem;
+    }
+  }
+  @media (min-width: 72rem) {
+    .gh-sets {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+  .gh-sets li {
+    word-break: auto-phrase;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    padding: 1.1rem 1.1rem 1.2rem;
+    border: 1px solid var(--gh-line);
+    border-radius: var(--gh-radius);
+    background: var(--gh-surface);
+  }
+  .gh-set-src {
+    align-self: flex-start;
+    padding: 0 0.5rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--sl-color-accent) 14%, transparent);
+    font-size: var(--sl-text-2xs);
+    font-weight: 500;
+    color: var(--gh-accent-text);
+  }
+  .gh-set-ga4 {
+    background: var(--gh-surface-2);
+    color: var(--sl-color-gray-2);
+  }
+  .gh-sets h3 {
+    margin: 0.3rem 0 0;
+    font-size: 1.0625rem;
+    font-weight: 600;
+    line-height: 1.45;
+    color: var(--sl-color-white);
+    font-feature-settings: "palt";
+  }
+  .gh-sets code {
+    font-family: var(--__sl-font-mono);
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+  .gh-set-grain {
+    margin: 0.35rem 0 0;
+    padding-top: 0.6rem;
+    border-top: 1px solid var(--gh-line);
+    font-size: var(--sl-text-sm);
+    font-weight: 500;
+    color: var(--sl-color-gray-1);
+  }
+  .gh-set-values {
+    margin: 0;
+    font-size: var(--sl-text-xs);
+    line-height: 1.7;
+    color: var(--sl-color-gray-3);
+  }
+  .gh-sets-foot {
+    max-width: 44rem;
+    margin: 1.25rem 0 0;
+    font-size: var(--sl-text-sm);
+    line-height: 1.8;
+    color: var(--sl-color-gray-3);
+  }
+  .gh-sets-foot a {
+    color: var(--sl-color-gray-2);
+    text-decoration-color: var(--sl-color-accent);
+    text-underline-offset: 0.22em;
+  }
+  .gh-sets-foot a:hover {
+    color: var(--gh-accent-text);
+  }
+
+  /* ---------- Start here ---------- */
+
+  .gh-next {
+    padding-bottom: 4rem;
+  }
+  .gh-next ol {
+    display: grid;
+    gap: 0.75rem;
+    margin: 2rem 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  @media (min-width: 40rem) {
+    .gh-next ol {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  @media (min-width: 72rem) {
+    .gh-next ol {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+  .gh-next a {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--gh-line);
+    border-radius: var(--gh-radius);
+    background: var(--gh-surface);
+    color: var(--sl-color-white);
+    text-decoration: none;
+    transition: border-color 160ms ease;
+  }
+  .gh-next a:hover,
+  .gh-next a:focus-visible {
+    border-color: var(--sl-color-accent);
+  }
+  .gh-next-n {
+    font-family: var(--__sl-font-mono);
+    font-size: var(--sl-text-xs);
+    color: var(--gh-accent-text);
+  }
+  .gh-next-t {
+    flex: 1;
+    font-weight: 500;
+  }
+  .gh-next svg {
+    color: var(--sl-color-gray-3);
+    transition: transform 160ms ease;
+  }
+  .gh-next a:hover svg {
+    transform: translateX(3px);
+    color: var(--gh-accent-text);
+  }
+
+  .gh-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem 1.5rem;
+    padding-block: 1.5rem 0.5rem;
+    border-top: 1px solid var(--sl-color-hairline);
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-3);
+  }
+  .gh-foot-name {
+    font-family: var(--__sl-font-mono);
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-2);
+  }
+  .gh-foot ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 1.75rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .gh-foot a {
+    display: inline-block;
+    padding-block: 0.8rem;
+    color: var(--sl-color-gray-2);
+    text-decoration: none;
+  }
+  .gh-foot a:hover {
+    color: var(--gh-accent-text);
+  }
+</style>
